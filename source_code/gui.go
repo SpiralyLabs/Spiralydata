@@ -20,15 +20,14 @@ import (
 )
 
 var (
-	logWidget       *widget.Label
-	logScroll       *container.Scroll
-	logs            []string
-	maxLogs         = 150
-	myApp           fyne.App
-	logMutex        sync.Mutex
-	logChannel      chan string
-	logTicker       *time.Ticker
-	logNeedsUpdate  bool
+	logWidget      *widget.Entry
+	logScroll      *container.Scroll
+	logs           []string
+	maxLogs        = 100
+	myApp          fyne.App
+	logMutex       sync.Mutex
+	logTicker      *time.Ticker
+	logNeedsUpdate bool
 )
 
 func main() {
@@ -140,12 +139,20 @@ func StartGUI() {
 	
 	startLogUpdater()
 	
-	myWindow := myApp.NewWindow("Spiraly Sync")
+	myWindow := myApp.NewWindow("Spiralydata")
 	myWindow.Resize(fyne.NewSize(1200, 700))
 	
-	logWidget = widget.NewLabel("🚀 Bienvenue dans Spiraly Sync\n")
+	logWidget = widget.NewEntry()
+	logWidget.SetText("🚀 Bienvenue dans Spiralydata\n")
+	logWidget.MultiLine = true
 	logWidget.Wrapping = fyne.TextWrapWord
+	logWidget.Disable()
+	
+	// Style monospace pour les logs
+	logWidget.TextStyle = fyne.TextStyle{Monospace: true}
+	
 	logScroll = container.NewVScroll(logWidget)
+	logScroll.SetMinSize(fyne.NewSize(400, 600))
 	
 	logContainer := container.NewBorder(
 		widget.NewLabelWithStyle("📋 Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
@@ -153,38 +160,44 @@ func StartGUI() {
 		logScroll,
 	)
 	
-	content := createMainMenu(myWindow)
+	// Tentative de connexion automatique
+	if !tryAutoConnect(myWindow) {
+		content := createMainMenu(myWindow)
+		
+		split := container.NewHSplit(
+			content,
+			logContainer,
+		)
+		split.Offset = 0.5
+		
+		myWindow.SetContent(split)
+	} else {
+		addLog("🔄 Connexion automatique en cours...")
+	}
 	
-	split := container.NewHSplit(
-		content,
-		logContainer,
-	)
-	split.Offset = 0.5
-	
-	myWindow.SetContent(split)
 	myWindow.ShowAndRun()
 }
 
 func createMainMenu(win fyne.Window) fyne.CanvasObject {
-	title := canvas.NewText("SPIRALY SYNC", color.White)
+	title := canvas.NewText("SPIRALYDATA", color.White)
 	title.TextSize = 28
 	title.Alignment = fyne.TextAlignCenter
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	
-	subtitle := widget.NewLabel("🔄 Synchronisation de fichiers intelligente")
+	subtitle := widget.NewLabel("📄 Synchronisation de fichiers intelligente")
 	subtitle.Alignment = fyne.TextAlignCenter
 	
-	hostBtn := widget.NewButton("🖥️ Mode Hôte (Host)", func() {
+	hostBtn := widget.NewButton("Mode Hôte (Host)", func() {
 		showHostSetup(win)
 	})
 	hostBtn.Importance = widget.HighImportance
 	
-	userBtn := widget.NewButton("👤 Mode Utilisateur (User)", func() {
+	userBtn := widget.NewButton("Mode Utilisateur (User)", func() {
 		showUserSetup(win)
 	})
 	userBtn.Importance = widget.HighImportance
 	
-	quitBtn := widget.NewButton("🚪 Quitter", func() {
+	quitBtn := widget.NewButton("Quitter", func() {
 		myApp.Quit()
 	})
 	
@@ -228,7 +241,7 @@ func showHostSetup(win fyne.Window) {
 		idEntry,
 	)
 	
-	startBtn := widget.NewButton("🚀 Démarrer le serveur", func() {
+	startBtn := widget.NewButton("Démarrer le serveur", func() {
 		port := portEntry.Text
 		hostID := idEntry.Text
 		
@@ -246,7 +259,7 @@ func showHostSetup(win fyne.Window) {
 	})
 	startBtn.Importance = widget.HighImportance
 	
-	backBtn := widget.NewButton("⬅️ Retour", func() {
+	backBtn := widget.NewButton("Retour", func() {
 		win.SetContent(container.NewHSplit(
 			createMainMenu(win),
 			container.NewBorder(
@@ -325,7 +338,7 @@ func showHostRunning(win fyne.Window, port, hostID string) {
 		loadingLabel.Refresh()
 	}()
 	
-	stopBtn := widget.NewButton("🛑 Arrêter le serveur", func() {
+	stopBtn := widget.NewButton("Arrêter le serveur", func() {
 		addLog("🛑 Arrêt du serveur...")
 		stopLoading = true
 		
@@ -391,335 +404,5 @@ func showHostRunning(win fyne.Window, port, hostID string) {
 		addLog(fmt.Sprintf("🏠 IP Locale: %s", localIP))
 		addLog(fmt.Sprintf("🌍 IP Publique: %s", pubIP))
 		currentServer.Start(port)
-	}()
-}
-
-func showUserSetup(win fyne.Window) {
-	prefs := myApp.Preferences()
-	
-	serverLabel := widget.NewLabel("🌐 IP du serveur")
-	serverLabel.Alignment = fyne.TextAlignLeading
-	serverEntry := widget.NewEntry()
-	serverEntry.SetPlaceHolder("ex: 192.168.1.100")
-	if savedIP := prefs.String("server_ip"); savedIP != "" {
-		serverEntry.SetText(savedIP)
-	}
-	
-	portLabel := widget.NewLabel("🔌 Port")
-	portLabel.Alignment = fyne.TextAlignLeading
-	portEntry := widget.NewEntry()
-	portEntry.SetPlaceHolder("ex: 1234")
-	if savedPort := prefs.String("server_port"); savedPort != "" {
-		portEntry.SetText(savedPort)
-	}
-	
-	idLabel := widget.NewLabel("🔑 ID du host")
-	idLabel.Alignment = fyne.TextAlignLeading
-	idEntry := widget.NewEntry()
-	idEntry.SetPlaceHolder("ex: 123456")
-	if savedID := prefs.String("host_id"); savedID != "" {
-		idEntry.SetText(savedID)
-	}
-	
-	saveCheck := widget.NewCheck("💾 Sauvegarder la configuration", nil)
-	saveCheck.SetChecked(prefs.Bool("save_config"))
-	
-	formContent := container.NewVBox(
-		serverLabel,
-		serverEntry,
-		widget.NewSeparator(),
-		portLabel,
-		portEntry,
-		widget.NewSeparator(),
-		idLabel,
-		idEntry,
-		widget.NewSeparator(),
-		saveCheck,
-	)
-	
-	connectBtn := widget.NewButton("🔌 Se connecter", func() {
-		serverIP := serverEntry.Text
-		port := portEntry.Text
-		hostID := idEntry.Text
-		
-		if serverIP == "" || port == "" || hostID == "" {
-			addLog("❌ IP, port et ID requis")
-			return
-		}
-		
-		serverAddr := serverIP + ":" + port
-		
-		if saveCheck.Checked {
-			prefs.SetString("server_ip", serverIP)
-			prefs.SetString("server_port", port)
-			prefs.SetString("host_id", hostID)
-			prefs.SetBool("save_config", true)
-			addLog("💾 Configuration sauvegardée")
-		}
-		
-		showUserConnecting(win, serverAddr, hostID)
-	})
-	connectBtn.Importance = widget.HighImportance
-	
-	backBtn := widget.NewButton("⬅️ Retour", func() {
-		win.SetContent(container.NewHSplit(
-			createMainMenu(win),
-			container.NewBorder(
-				widget.NewLabelWithStyle("📋 Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-				nil, nil, nil,
-				container.NewVScroll(logWidget),
-			),
-		))
-	})
-	
-	buttonsContainer := container.NewVBox(
-		connectBtn,
-		backBtn,
-	)
-	
-	content := container.NewVBox(
-		widget.NewLabelWithStyle("🔌 Connexion au Serveur", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		layout.NewSpacer(),
-		formContent,
-		layout.NewSpacer(),
-		container.NewCenter(container.NewPadded(buttonsContainer)),
-		layout.NewSpacer(),
-	)
-	
-	split := container.NewHSplit(
-		content,
-		container.NewBorder(
-			widget.NewLabelWithStyle("📋 Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			nil, nil, nil,
-			container.NewVScroll(logWidget),
-		),
-	)
-	split.Offset = 0.5
-	
-	win.SetContent(split)
-}
-
-func showUserConnecting(win fyne.Window, serverAddr, hostID string) {
-	addLog(fmt.Sprintf("🔌 Connexion à %s...", serverAddr))
-	
-	infoText := fmt.Sprintf(
-		"⏳ CONNEXION EN COURS\n\n"+
-			"🌐 Serveur: %s\n"+
-			"🔑 ID: %s\n\n"+
-			"📡 Statut: Connexion...",
-		serverAddr, hostID,
-	)
-	
-	info := widget.NewLabel(infoText)
-	info.Wrapping = fyne.TextWrapWord
-	
-	loadingChars := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	loadingIndex := 0
-	loadingLabel := widget.NewLabel("⠋ Connexion en cours...")
-	statusLabel := widget.NewLabel("📡 Statut: Connexion en cours...")
-	
-	stopAnimation := false
-	connectionSuccess := false
-	var client *Client
-	
-	syncBtn := widget.NewButton("🔄 SYNC AUTO", nil)
-	syncBtn.Importance = widget.DangerImportance
-	syncBtn.Hide()
-	
-	pullBtn := widget.NewButton("📥 RECEVOIR", nil)
-	pullBtn.Importance = widget.MediumImportance
-	pullBtn.Disable()
-	pullBtn.Hide()
-	
-	pushBtn := widget.NewButton("📤 ENVOYER", nil)
-	pushBtn.Importance = widget.MediumImportance
-	pushBtn.Disable()
-	pushBtn.Hide()
-	
-	clearBtn := widget.NewButton("🗑️ VIDER LOCAL", nil)
-	clearBtn.Importance = widget.MediumImportance
-	clearBtn.Disable()
-	clearBtn.Hide()
-	
-	syncBtn.OnTapped = func() {
-		if client != nil {
-			client.ToggleAutoSync()
-			if client.autoSync {
-				syncBtn.SetText("🟢 SYNC AUTO ACTIVE")
-				syncBtn.Importance = widget.SuccessImportance
-				statusLabel.SetText("📡 Statut: Synchronisation Automatique Active")
-				
-				pullBtn.Disable()
-				pushBtn.Disable()
-				clearBtn.Disable()
-			} else {
-				syncBtn.SetText("🔄 SYNC AUTO")
-				syncBtn.Importance = widget.DangerImportance
-				statusLabel.SetText("📡 Statut: Mode Manuel")
-				
-				pullBtn.Enable()
-				pushBtn.Enable()
-				clearBtn.Enable()
-			}
-			syncBtn.Refresh()
-			statusLabel.Refresh()
-		}
-	}
-	
-	pullBtn.OnTapped = func() {
-		if client != nil && !client.autoSync {
-			pullBtn.Disable()
-			pullBtn.SetText("⏳ Reception...")
-			go func() {
-				client.PullAllFromServer()
-				time.Sleep(100 * time.Millisecond)
-				pullBtn.SetText("📥 RECEVOIR")
-				pullBtn.Enable()
-				pullBtn.Refresh()
-			}()
-		}
-	}
-	
-	pushBtn.OnTapped = func() {
-		if client != nil && !client.autoSync {
-			pushBtn.Disable()
-			pushBtn.SetText("⏳ Envoi...")
-			go func() {
-				client.PushLocalChanges()
-				time.Sleep(100 * time.Millisecond)
-				pushBtn.SetText("📤 ENVOYER")
-				pushBtn.Enable()
-				pushBtn.Refresh()
-			}()
-		}
-	}
-	
-	clearBtn.OnTapped = func() {
-		if client != nil && !client.autoSync {
-			clearBtn.Disable()
-			clearBtn.SetText("⏳ Suppression...")
-			go func() {
-				client.ClearLocalFiles()
-				time.Sleep(100 * time.Millisecond)
-				clearBtn.SetText("🗑️ VIDER LOCAL")
-				clearBtn.Enable()
-				clearBtn.Refresh()
-			}()
-		}
-	}
-	
-	syncContainer := container.NewVBox(
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("⚙️ Mode de Synchronisation", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		container.NewCenter(
-			container.NewMax(
-				container.NewPadded(syncBtn),
-			),
-		),
-	)
-	syncContainer.Hide()
-	
-	manualControlsContainer := container.NewVBox(
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("🎮 Contrôles Manuels", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		container.NewCenter(
-			container.NewMax(
-				container.NewPadded(pullBtn),
-			),
-		),
-		container.NewCenter(
-			container.NewMax(
-				container.NewPadded(pushBtn),
-			),
-		),
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("⚡ Actions Avancées", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		container.NewCenter(
-			container.NewMax(
-				container.NewPadded(clearBtn),
-			),
-		),
-	)
-	manualControlsContainer.Hide()
-	
-	disconnectBtn := widget.NewButton("🔌 DÉCONNECTER", func() {
-		addLog("👋 Déconnexion...")
-		stopAnimation = true
-		if client != nil {
-			client.shouldExit = true
-			if client.ws != nil {
-				client.ws.Close()
-			}
-		}
-		win.SetContent(container.NewHSplit(
-			createMainMenu(win),
-			container.NewBorder(
-				widget.NewLabelWithStyle("📋 Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-				nil, nil, nil,
-				container.NewVScroll(logWidget),
-			),
-		))
-	})
-	disconnectBtn.Importance = widget.DangerImportance
-	
-	content := container.NewVBox(
-		widget.NewLabelWithStyle("ℹ️ Informations de Connexion", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		widget.NewSeparator(),
-		info,
-		widget.NewSeparator(),
-		loadingLabel,
-		statusLabel,
-		syncContainer,
-		manualControlsContainer,
-		layout.NewSpacer(),
-		container.NewCenter(container.NewPadded(disconnectBtn)),
-	)
-	
-	split := container.NewHSplit(
-		content,
-		container.NewBorder(
-			widget.NewLabelWithStyle("📋 Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			nil, nil, nil,
-			container.NewVScroll(logWidget),
-		),
-	)
-	split.Offset = 0.5
-	
-	win.SetContent(split)
-	
-	go func() {
-		for !stopAnimation && !connectionSuccess {
-			time.Sleep(100 * time.Millisecond)
-			if !stopAnimation && !connectionSuccess {
-				char := loadingChars[loadingIndex%len(loadingChars)]
-				loadingLabel.SetText(fmt.Sprintf("%s Connexion en cours...", char))
-				loadingLabel.Refresh()
-				loadingIndex++
-			}
-		}
-	}()
-	
-	go func() {
-		addLog(fmt.Sprintf("🔌 Connexion au serveur %s avec l'ID %s", serverAddr, hostID))
-		
-		go StartClientGUI(serverAddr, hostID, &stopAnimation, &connectionSuccess, loadingLabel, statusLabel, info, &client)
-		
-		time.Sleep(2 * time.Second)
-		if connectionSuccess {
-			syncBtn.Show()
-			pullBtn.Show()
-			pushBtn.Show()
-			clearBtn.Show()
-			
-			pullBtn.Enable()
-			pushBtn.Enable()
-			clearBtn.Enable()
-			
-			syncContainer.Show()
-			manualControlsContainer.Show()
-			content.Refresh()
-			
-			addLog("🎮 Interface de contrôle prête")
-		}
 	}()
 }
