@@ -109,4 +109,4 @@ Le logiciel sera compilé et prêt à l'emploi dans le dossier courant.
 ## 📄 Licence
 
 Projet open-source - Spiralydata
-Par Spiralyfox | Merci 
+Par Spiralyfox | Merci "<!-- PR coauthor test -->" 
