@@ -110,3 +110,5 @@ Le logiciel sera compilé et prêt à l'emploi dans le dossier courant.
 
 Projet open-source - Spiralydata
 Par Spiralyfox | Merci "<!-- PR coauthor test -->" 
+"<!-- Coauthor badge test -->" 
+"<!-- Coauthor badge test 2 -->" 
