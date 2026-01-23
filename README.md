@@ -274,11 +274,11 @@ chmod +x setup_linux.sh
 
 ## License
 
-This project is open source and available for personal and commercial use.
+This project is open source.
 
 ## Contributing
 
-Contributions are welcome! Feel free to open issues or submit pull requests.
+Contributions are welcome ! Feel free to open issues or submit pull requests.
 
 ## Support
 
