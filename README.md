@@ -27,7 +27,7 @@ Spiralydata est une application de synchronisation de fichiers en temps réel en
 #### Fonctionnalités avancées
 - **Backup** : Sauvegarde complète du serveur vers un dossier local horodaté
 - **Filtres** : Inclusion/exclusion par extension ou pattern
-- **Prévisualisation** : Aperçu des fichiers texte et images
+- **Prévisualisation** : Aperçu des fichiers texte 
 - **Sécurité** : Authentification par identifiant hôte
 
 ### 🚀 Installation
@@ -63,7 +63,7 @@ go build -ldflags "-H=windowsgui" -o spiralydata.exe .
 2. Cliquez sur **"Héberger"**
 3. Configurez le port (défaut: 1212)
 4. Notez l'**identifiant hôte** affiché
-5. Partagez votre **IP locale** et l'**identifiant** aux clients
+5. Partagez votre **IP** et l'**identifiant** aux clients
 
 #### Mode Client (Utilisateur)
 1. Lancez l'application
@@ -109,10 +109,6 @@ Le fichier `config.json` est créé automatiquement et contient :
 | Fichiers non synchronisés | Vérifiez les filtres configurés |
 | Application qui freeze | Réduisez le nombre de fichiers ou augmentez les délais |
 
-### 📄 Licence
-
-Ce projet est sous licence MIT.
-
 ---
 
 ## 🇬🇧 English
@@ -138,7 +134,7 @@ Spiralydata is a real-time file synchronization application between a host (serv
 #### Advanced Features
 - **Backup**: Complete server backup to a local timestamped folder
 - **Filters**: Include/exclude by extension or pattern
-- **Preview**: Preview text files and images
+- **Preview**: Preview text files
 - **Security**: Authentication by host identifier
 
 ### 🚀 Installation
@@ -174,7 +170,7 @@ go build -ldflags "-H=windowsgui" -o spiralydata.exe .
 2. Click **"Host"**
 3. Configure the port (default: 1212)
 4. Note the displayed **host identifier**
-5. Share your **local IP** and **identifier** with clients
+5. Share your **IP** and **identifier** with clients
 
 #### Client Mode (User)
 1. Launch the application
@@ -219,7 +215,3 @@ The `config.json` file is created automatically and contains:
 | Incorrect identifier | Check the identifier displayed on host side |
 | Files not synchronized | Check configured filters |
 | Application freezing | Reduce number of files or increase delays |
-
-### 📄 License
-
-This project is licensed under the MIT License.
