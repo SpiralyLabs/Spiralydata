@@ -53,9 +53,9 @@ var lightColors = map[fyne.ThemeColorName]color.Color{
 	theme.ColorNameSuccess:         color.RGBA{R: 39, G: 174, B: 96, A: 255},
 	theme.ColorNameError:           color.RGBA{R: 192, G: 57, B: 43, A: 255},
 	theme.ColorNameWarning:         color.RGBA{R: 211, G: 166, B: 37, A: 255},
-	theme.ColorNameDisabled:        color.RGBA{R: 180, G: 180, B: 190, A: 255},
+	theme.ColorNameDisabled:        color.RGBA{R: 60, G: 60, B: 70, A: 255}, // Plus foncé pour lisibilité
 	theme.ColorNameInputBackground: color.RGBA{R: 255, G: 255, B: 255, A: 255},
-	theme.ColorNamePlaceHolder:     color.RGBA{R: 150, G: 150, B: 160, A: 255},
+	theme.ColorNamePlaceHolder:     color.RGBA{R: 120, G: 120, B: 130, A: 255},
 	theme.ColorNamePrimary:         color.RGBA{R: 59, G: 114, B: 227, A: 255},
 	theme.ColorNameHover:           color.RGBA{R: 220, G: 222, B: 228, A: 255},
 	theme.ColorNameFocus:           color.RGBA{R: 59, G: 114, B: 227, A: 255},

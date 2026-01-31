@@ -496,6 +496,8 @@ var globalFilterConfig *FilterConfig
 func GetFilterConfig() *FilterConfig {
 	if globalFilterConfig == nil {
 		globalFilterConfig = NewFilterConfig()
+		// Charger les filtres sauvegardés depuis la config
+		LoadFiltersFromConfig(globalFilterConfig)
 	}
 	return globalFilterConfig
 }
@@ -503,4 +505,6 @@ func GetFilterConfig() *FilterConfig {
 // InitFilterConfig initialise la configuration des filtres
 func InitFilterConfig() {
 	globalFilterConfig = NewFilterConfig()
+	// Charger les filtres sauvegardés depuis la config
+	LoadFiltersFromConfig(globalFilterConfig)
 }

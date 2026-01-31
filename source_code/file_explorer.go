@@ -42,6 +42,7 @@ type FileExplorer struct {
 	settings         *ExplorerSettings
 	previewPanel     *PreviewPanel
 	showingPreview   bool
+	searchQuery      string // Requête de recherche actuelle
 }
 
 func NewFileExplorer(client *Client, win fyne.Window, backCallback func()) *FileExplorer {
@@ -311,17 +312,14 @@ func (fe *FileExplorer) buildTreeStructure() {
 }
 
 func (fe *FileExplorer) showDirectoryUI() {
-	addLog("🖥️ Affichage de l'explorateur...")
-	
 	defer func() {
 		if r := recover(); r != nil {
-			addLog(fmt.Sprintf("❌ Panic récupéré dans showDirectoryUI: %v", r))
+			addLog(fmt.Sprintf("Erreur dans explorateur: %v", r))
 		}
 	}()
 
 	// Vérifications de sécurité
 	if fe.currentDir == nil {
-		addLog("❌ Erreur: currentDir est nil")
 		if fe.rootDir != nil {
 			fe.currentDir = fe.rootDir
 		} else {
@@ -370,12 +368,30 @@ func (fe *FileExplorer) showDirectoryUI() {
 	})
 	breadcrumb.SetPath(fe.getPathParts())
 
-	// Barre de recherche
+	// Barre de recherche avec bouton
 	searchEntry := widget.NewEntry()
-	searchEntry.SetPlaceHolder("🔍 Rechercher...")
-	searchEntry.OnChanged = func(query string) {
-		fe.filterItems(query)
+	searchEntry.SetPlaceHolder("Rechercher...")
+	if fe.searchQuery != "" {
+		searchEntry.SetText(fe.searchQuery)
 	}
+
+	searchBtn := widget.NewButton("Rechercher", func() {
+		fe.searchQuery = searchEntry.Text
+		fe.showDirectoryUI()
+	})
+	searchBtn.Importance = widget.MediumImportance
+
+	clearSearchBtn := widget.NewButton("x", func() {
+		fe.searchQuery = ""
+		searchEntry.SetText("")
+		fe.showDirectoryUI()
+	})
+	clearSearchBtn.Importance = widget.LowImportance
+
+	searchContainer := container.NewBorder(nil, nil, nil, 
+		container.NewHBox(searchBtn, clearSearchBtn),
+		searchEntry,
+	)
 
 	// Contrôles de tri - créer SANS callback d'abord pour éviter la boucle
 	sortMenu := widget.NewSelect([]string{"Nom", "Taille", "Date", "Type"}, nil)
@@ -421,7 +437,7 @@ func (fe *FileExplorer) showDirectoryUI() {
 	countLabel := widget.NewLabel(fmt.Sprintf("📊 %d éléments", fileCount))
 
 	// Boutons sélection
-	selectAllBtn := widget.NewButton("☑️ Tout", func() {
+	selectAllBtn := widget.NewButton("Tout sélectionner", func() {
 		fe.mu.Lock()
 		for _, item := range fe.currentDir.Children {
 			if item != nil {
@@ -433,7 +449,7 @@ func (fe *FileExplorer) showDirectoryUI() {
 	})
 	selectAllBtn.Importance = widget.LowImportance
 
-	deselectAllBtn := widget.NewButton("☐ Aucun", func() {
+	deselectAllBtn := widget.NewButton("Tout désélectionner", func() {
 		fe.mu.Lock()
 		for _, item := range fe.currentDir.Children {
 			if item != nil {
@@ -457,14 +473,14 @@ func (fe *FileExplorer) showDirectoryUI() {
 		parentBtn.Disable()
 	}
 
-	// Bouton suppression dossier
-	deleteBtn := widget.NewButton("🗑️", func() {
+	// Bouton suppression dossier (sans émoji)
+	deleteBtn := widget.NewButton("Supprimer dossier", func() {
 		fe.confirmDeleteDirectory()
 	})
 	deleteBtn.Importance = widget.DangerImportance
 
 	// Bouton refresh
-	refreshBtn := widget.NewButton("🔄", func() {
+	refreshBtn := widget.NewButton("Actualiser", func() {
 		fe.treeLoaded = false
 		fe.Show()
 	})
@@ -495,6 +511,18 @@ func (fe *FileExplorer) showDirectoryUI() {
 
 	// Trier les éléments
 	sortedChildren := fe.settings.SortItems(fe.currentDir.Children)
+
+	// Filtrer si recherche active
+	var filteredChildren []*FileTreeItem
+	if fe.searchQuery != "" {
+		query := strings.ToLower(fe.searchQuery)
+		for _, item := range sortedChildren {
+			if item != nil && strings.Contains(strings.ToLower(item.Name), query) {
+				filteredChildren = append(filteredChildren, item)
+			}
+		}
+		sortedChildren = filteredChildren
+	}
 
 	// Contenu de l'arborescence
 	treeContent := container.NewVBox()
@@ -534,7 +562,7 @@ func (fe *FileExplorer) showDirectoryUI() {
 		} else {
 			// Bouton aperçu pour fichiers supportés
 			if CanPreview(itemName) {
-				previewBtn := widget.NewButton("👁️", func() {
+				previewBtn := widget.NewButton("Aperçu", func() {
 					fe.showFilePreview(itemPath)
 				})
 				previewBtn.Importance = widget.LowImportance
@@ -555,12 +583,12 @@ func (fe *FileExplorer) showDirectoryUI() {
 	treeScroll.SetMinSize(fyne.NewSize(450, 350))
 
 	// Boutons action
-	downloadBtn := widget.NewButton("⬇️ Télécharger", func() {
+	downloadBtn := widget.NewButton("Télécharger", func() {
 		fe.showDownloadOptions()
 	})
 	downloadBtn.Importance = widget.HighImportance
 
-	backBtn := widget.NewButton("⬅️ Retour", func() {
+	backBtn := widget.NewButton("Retour", func() {
 		fe.backCallback()
 	})
 
@@ -586,7 +614,7 @@ func (fe *FileExplorer) showDirectoryUI() {
 			if favName == "" || favName == "/" || favName == "." {
 				favName = "Racine"
 			}
-			btn := widget.NewButton("📁 "+favName, func() {
+			btn := widget.NewButton(favName, func() {
 				if item, exists := fe.allItems[favPath]; exists {
 					fe.currentDir = item
 					fe.showDirectoryUI()
@@ -606,7 +634,7 @@ func (fe *FileExplorer) showDirectoryUI() {
 		container.NewVBox(
 			breadcrumb.GetContainer(),
 			widget.NewSeparator(),
-			searchEntry,
+			searchContainer,
 			widget.NewSeparator(),
 			toolBar,
 			selectionBar,
@@ -736,7 +764,7 @@ func (fe *FileExplorer) showPreviewPanel(localPath, originalPath string) {
 		}
 	}
 
-	backToLogsBtn := widget.NewButton("⬅️ Retour aux logs", func() {
+	backToLogsBtn := widget.NewButton("Retour aux logs", func() {
 		os.Remove(localPath)
 		fe.showDirectoryUI()
 	})
@@ -996,13 +1024,13 @@ func (fe *FileExplorer) showDownloadOptions() {
 	
 	dlg := dialog.NewCustom("Destination du téléchargement", "Annuler", content, fe.win)
 	
-	syncDirBtn := widget.NewButton("📂 Dans le dossier de synchronisation", func() {
+	syncDirBtn := widget.NewButton("Dans le dossier de synchronisation", func() {
 		dlg.Hide()
 		fe.downloadToSyncDir(selected)
 	})
 	syncDirBtn.Importance = widget.HighImportance
 	
-	customDirBtn := widget.NewButton("📁 Autre emplacement...", func() {
+	customDirBtn := widget.NewButton("Autre emplacement...", func() {
 		dlg.Hide()
 		fe.downloadToCustomDir(selected)
 	})
@@ -1051,11 +1079,17 @@ func (fe *FileExplorer) downloadToCustomDir(items []string) {
 }
 
 func (fe *FileExplorer) performDownload(items []string, targetDir string) {
-	addLog("📥 Début du téléchargement...")
+	addLog("Debut du telechargement...")
+
+	// Ignorer le tracking pendant le téléchargement
+	fe.client.skipTracking = true
+	defer func() {
+		fe.client.skipTracking = false
+	}()
 
 	expandedItems := fe.expandDirectories(items)
 
-	addLog(fmt.Sprintf("📦 %d fichiers/dossiers à télécharger", len(expandedItems)))
+	addLog(fmt.Sprintf("%d fichiers/dossiers a telecharger", len(expandedItems)))
 
 	fe.client.downloadActive = true
 	fe.client.downloadChan = make(chan FileChange, 100)
@@ -1068,7 +1102,7 @@ func (fe *FileExplorer) performDownload(items []string, targetDir string) {
 	err := fe.client.WriteJSONSafe(reqMsg)
 
 	if err != nil {
-		addLog(fmt.Sprintf("❌ Erreur envoi requête: %v", err))
+		addLog(fmt.Sprintf("Erreur envoi requete: %v", err))
 		fe.client.downloadActive = false
 		return
 	}
@@ -1080,7 +1114,7 @@ func (fe *FileExplorer) performDownload(items []string, targetDir string) {
 	for downloaded < len(expandedItems) {
 		select {
 		case <-timeout:
-			addLog(fmt.Sprintf("⏱️ Timeout - %d/%d fichiers téléchargés", downloaded, len(expandedItems)))
+			addLog(fmt.Sprintf("Timeout - %d/%d fichiers telecharges", downloaded, len(expandedItems)))
 			fe.client.downloadActive = false
 			return
 			
@@ -1090,7 +1124,7 @@ func (fe *FileExplorer) performDownload(items []string, targetDir string) {
 				downloaded++
 				
 				if time.Since(lastUpdate) > 1*time.Second || downloaded == len(expandedItems) {
-					addLog(fmt.Sprintf("📥 Téléchargés: %d/%d", downloaded, len(expandedItems)))
+					addLog(fmt.Sprintf("Telecharges: %d/%d", downloaded, len(expandedItems)))
 					lastUpdate = time.Now()
 				}
 			}
@@ -1098,7 +1132,7 @@ func (fe *FileExplorer) performDownload(items []string, targetDir string) {
 	}
 	
 	fe.client.downloadActive = false
-	addLog(fmt.Sprintf("✅ Téléchargement terminé: %d fichiers", downloaded))
+	addLog(fmt.Sprintf("Telechargement termine: %d fichiers", downloaded))
 }
 
 func (fe *FileExplorer) expandDirectories(items []string) []string {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
+	"os"
 	"strconv"
 	"strings"
 
@@ -55,13 +57,12 @@ func (t *ExtensionTag) CreateRenderer() fyne.WidgetRenderer {
 
 // FilterConfigUI gère l'interface des filtres
 type FilterConfigUI struct {
-	config       *FilterConfig
-	win          fyne.Window
+	config        *FilterConfig
+	win           fyne.Window
 	tagsContainer *fyne.Container
-	modeToggle   *widget.Button
-	enableCheck  *widget.Check
-	summaryLabel *widget.Label
-	onUpdate     func()
+	modeToggle    *widget.Button
+	summaryLabel  *widget.Label
+	onUpdate      func()
 }
 
 // NewFilterConfigUI crée une nouvelle interface de filtres
@@ -74,33 +75,24 @@ func NewFilterConfigUI(config *FilterConfig, win fyne.Window, onUpdate func()) *
 }
 
 // CreateExtensionFilterPanel crée le panneau de filtrage par extension
+// Sans le checkbox "Activer le filtrage" en haut
 func (ui *FilterConfigUI) CreateExtensionFilterPanel() *fyne.Container {
-	// Titre
-	titleLabel := widget.NewLabelWithStyle("📁 Filtrage par Extension", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-
-	// Checkbox pour activer/désactiver
-	ui.enableCheck = widget.NewCheck("Activer le filtrage", func(enabled bool) {
-		ui.config.Filters.Extension.SetEnabled(enabled)
-		ui.updateUI()
-		if ui.onUpdate != nil {
-			ui.onUpdate()
-		}
-	})
-	ui.enableCheck.SetChecked(ui.config.Filters.Extension.IsEnabled())
+	// Titre sans émoji
+	titleLabel := widget.NewLabelWithStyle("Filtrage par Extension", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	// Label du mode
 	modeLabel := widget.NewLabel("Extensions à exclure:")
 
-	// Bouton toggle mode
-	ui.modeToggle = widget.NewButton("🔄 Inverser (Whitelist)", func() {
+	// Bouton toggle mode (sans émoji)
+	ui.modeToggle = widget.NewButton("Inverser (Whitelist)", func() {
 		currentMode := ui.config.Filters.Extension.GetMode()
 		if currentMode == FilterModeBlacklist {
 			ui.config.Filters.Extension.SetMode(FilterModeWhitelist)
-			ui.modeToggle.SetText("🔄 Inverser (Blacklist)")
+			ui.modeToggle.SetText("Inverser (Blacklist)")
 			modeLabel.SetText("Extensions autorisées:")
 		} else {
 			ui.config.Filters.Extension.SetMode(FilterModeBlacklist)
-			ui.modeToggle.SetText("🔄 Inverser (Whitelist)")
+			ui.modeToggle.SetText("Inverser (Whitelist)")
 			modeLabel.SetText("Extensions à exclure:")
 		}
 		if ui.onUpdate != nil {
@@ -111,7 +103,7 @@ func (ui *FilterConfigUI) CreateExtensionFilterPanel() *fyne.Container {
 
 	// Initialiser le texte du mode
 	if ui.config.Filters.Extension.GetMode() == FilterModeWhitelist {
-		ui.modeToggle.SetText("🔄 Inverser (Blacklist)")
+		ui.modeToggle.SetText("Inverser (Blacklist)")
 		modeLabel.SetText("Extensions autorisées:")
 	}
 
@@ -122,20 +114,20 @@ func (ui *FilterConfigUI) CreateExtensionFilterPanel() *fyne.Container {
 	tagsScroll := container.NewHScroll(ui.tagsContainer)
 	tagsScroll.SetMinSize(fyne.NewSize(400, 45))
 
-	// Bouton ajouter
-	addBtn := widget.NewButton("➕ Ajouter", func() {
+	// Bouton ajouter (sans émoji)
+	addBtn := widget.NewButton("Ajouter", func() {
 		ui.showAddExtensionDialog()
 	})
 	addBtn.Importance = widget.HighImportance
 
-	// Bouton suggestions
-	suggestBtn := widget.NewButton("📋 Suggestions", func() {
+	// Bouton suggestions (sans émoji)
+	suggestBtn := widget.NewButton("Suggestions", func() {
 		ui.showSuggestionsDialog()
 	})
 	suggestBtn.Importance = widget.MediumImportance
 
-	// Bouton tout effacer
-	clearBtn := widget.NewButton("🗑️ Tout effacer", func() {
+	// Bouton tout effacer (emoji seul OK)
+	clearBtn := widget.NewButton("🗑️", func() {
 		dialog.ShowConfirm("Confirmer", "Supprimer toutes les extensions?", func(ok bool) {
 			if ok {
 				ui.config.Filters.Extension.Clear()
@@ -153,12 +145,6 @@ func (ui *FilterConfigUI) CreateExtensionFilterPanel() *fyne.Container {
 	ui.updateSummary()
 
 	// Layout
-	header := container.NewHBox(
-		titleLabel,
-		layout.NewSpacer(),
-		ui.enableCheck,
-	)
-
 	modeRow := container.NewHBox(
 		modeLabel,
 		layout.NewSpacer(),
@@ -173,7 +159,7 @@ func (ui *FilterConfigUI) CreateExtensionFilterPanel() *fyne.Container {
 	)
 
 	return container.NewVBox(
-		header,
+		titleLabel,
 		widget.NewSeparator(),
 		modeRow,
 		tagsScroll,
@@ -221,7 +207,7 @@ func (ui *FilterConfigUI) createTagWidget(ext string) fyne.CanvasObject {
 		if ui.onUpdate != nil {
 			ui.onUpdate()
 		}
-		addLog(fmt.Sprintf("🏷️ Extension supprimée: %s", ext))
+		addLog(fmt.Sprintf("Extension supprimée: %s", ext))
 	})
 	removeBtn.Importance = widget.LowImportance
 
@@ -264,7 +250,7 @@ func (ui *FilterConfigUI) showAddExtensionDialog() {
 			if ui.onUpdate != nil {
 				ui.onUpdate()
 			}
-			addLog(fmt.Sprintf("🏷️ Extension ajoutée: %s", ext))
+			addLog(fmt.Sprintf("Extension ajoutée: %s", ext))
 		}
 	}, ui.win)
 
@@ -275,10 +261,10 @@ func (ui *FilterConfigUI) showAddExtensionDialog() {
 			return
 		}
 		if !ValidateExtension(s) {
-			errorLabel.SetText("❌ Format invalide")
+			errorLabel.SetText("Format invalide")
 		} else {
 			normalized, _ := NormalizeExtension(s)
-			errorLabel.SetText(fmt.Sprintf("✓ Sera ajouté comme: %s", normalized))
+			errorLabel.SetText(fmt.Sprintf("Sera ajouté comme: %s", normalized))
 		}
 	}
 }
@@ -305,7 +291,7 @@ func (ui *FilterConfigUI) showSuggestionsDialog() {
 	content.Add(widget.NewLabel("Dossiers à exclure:"))
 
 	folderChecks := make(map[string]*widget.Check)
-	for _, folder := range CommonExcludedFolders[:7] { // Limiter à 7 dossiers
+	for _, folder := range CommonExcludedFolders[:7] {
 		folderCopy := folder
 		check := widget.NewCheck(folder, func(checked bool) {})
 		folderChecks[folderCopy] = check
@@ -317,19 +303,17 @@ func (ui *FilterConfigUI) showSuggestionsDialog() {
 
 	dialog.ShowCustomConfirm("Suggestions", "Appliquer", "Annuler", scroll, func(ok bool) {
 		if ok {
-			// Ajouter les extensions cochées
 			for category, check := range categoryBoxes {
 				if check.Checked {
 					ui.config.Filters.Extension.AddSuggestedCategory(category)
-					addLog(fmt.Sprintf("🏷️ Catégorie ajoutée: %s", category))
+					addLog(fmt.Sprintf("Catégorie ajoutée: %s", category))
 				}
 			}
 
-			// Ajouter les dossiers cochés
 			for folder, check := range folderChecks {
 				if check.Checked {
 					ui.config.Filters.Path.AddExcludedFolder(folder)
-					addLog(fmt.Sprintf("📁 Dossier exclu: %s", folder))
+					addLog(fmt.Sprintf("Dossier exclu: %s", folder))
 				}
 			}
 
@@ -348,130 +332,102 @@ func (ui *FilterConfigUI) updateSummary() {
 	}
 
 	extCount := len(ui.config.Filters.Extension.GetExtensions())
-	ignoredCount := ui.config.Filters.Extension.GetIgnoredCount()
-
-	mode := "exclusion"
+	mode := "Blacklist"
 	if ui.config.Filters.Extension.GetMode() == FilterModeWhitelist {
-		mode = "inclusion"
+		mode = "Whitelist"
 	}
 
-	status := "désactivé"
-	if ui.config.Filters.Extension.IsEnabled() {
-		status = "activé"
-	}
-
-	summary := fmt.Sprintf("📊 %d extensions en %s | Statut: %s | Fichiers ignorés: %d",
-		extCount, mode, status, ignoredCount)
-	ui.summaryLabel.SetText(summary)
+	ui.summaryLabel.SetText(fmt.Sprintf("%d extension(s) - Mode: %s", extCount, mode))
 }
 
 // updateUI met à jour l'interface
 func (ui *FilterConfigUI) updateUI() {
 	ui.refreshTags()
+	ui.updateSummary()
 }
 
 // CreateSizeFilterPanel crée le panneau de filtrage par taille
 func (ui *FilterConfigUI) CreateSizeFilterPanel() *fyne.Container {
-	titleLabel := widget.NewLabelWithStyle("📏 Filtrage par Taille", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	titleLabel := widget.NewLabelWithStyle("Filtrage par Taille", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	enableCheck := widget.NewCheck("Activer", func(enabled bool) {
-		ui.config.Filters.Size.Enabled = enabled
-		if ui.onUpdate != nil {
-			ui.onUpdate()
-		}
-	})
-	enableCheck.SetChecked(ui.config.Filters.Size.Enabled)
-
-	// Taille minimale
-	minLabel := widget.NewLabel("Taille minimale (Ko):")
+	// Taille min
+	minLabel := widget.NewLabel("Taille minimum:")
 	minEntry := widget.NewEntry()
 	minEntry.SetPlaceHolder("0")
 	if ui.config.Filters.Size.MinSize > 0 {
-		minEntry.SetText(fmt.Sprintf("%d", ui.config.Filters.Size.MinSize/1024))
-	}
-	minEntry.OnChanged = func(s string) {
-		if val, err := strconv.ParseInt(s, 10, 64); err == nil {
-			ui.config.Filters.Size.MinSize = val * 1024
-			if ui.onUpdate != nil {
-				ui.onUpdate()
-			}
-		}
+		minEntry.SetText(strconv.FormatInt(ui.config.Filters.Size.MinSize, 10))
 	}
 
-	// Taille maximale
-	maxLabel := widget.NewLabel("Taille maximale (Mo):")
+	// Container avec taille fixe pour le champ
+	minEntryContainer := container.NewGridWrap(fyne.NewSize(120, 36), minEntry)
+
+	minUnitSelect := widget.NewSelect([]string{"Octets", "Ko", "Mo", "Go"}, nil)
+	minUnitSelect.SetSelected("Octets")
+
+	// Taille max
+	maxLabel := widget.NewLabel("Taille maximum:")
 	maxEntry := widget.NewEntry()
 	maxEntry.SetPlaceHolder("0 (illimité)")
 	if ui.config.Filters.Size.MaxSize > 0 {
-		maxEntry.SetText(fmt.Sprintf("%d", ui.config.Filters.Size.MaxSize/(1024*1024)))
-	}
-	maxEntry.OnChanged = func(s string) {
-		if val, err := strconv.ParseInt(s, 10, 64); err == nil {
-			ui.config.Filters.Size.MaxSize = val * 1024 * 1024
-			if ui.onUpdate != nil {
-				ui.onUpdate()
-			}
-		}
+		maxEntry.SetText(strconv.FormatInt(ui.config.Filters.Size.MaxSize, 10))
 	}
 
-	// Presets rapides
-	presetsLabel := widget.NewLabel("Presets:")
-	preset10MB := widget.NewButton("< 10 Mo", func() {
-		maxEntry.SetText("10")
-		ui.config.Filters.Size.MaxSize = 10 * 1024 * 1024
+	// Container avec taille fixe pour le champ
+	maxEntryContainer := container.NewGridWrap(fyne.NewSize(120, 36), maxEntry)
+
+	maxUnitSelect := widget.NewSelect([]string{"Octets", "Ko", "Mo", "Go"}, nil)
+	maxUnitSelect.SetSelected("Octets")
+
+	// Callback pour mettre à jour
+	updateSize := func() {
+		minVal, _ := strconv.ParseInt(minEntry.Text, 10, 64)
+		maxVal, _ := strconv.ParseInt(maxEntry.Text, 10, 64)
+
+		// Convertir selon l'unité
+		minMultiplier := getMultiplier(minUnitSelect.Selected)
+		maxMultiplier := getMultiplier(maxUnitSelect.Selected)
+
+		ui.config.Filters.Size.MinSize = minVal * minMultiplier
+		ui.config.Filters.Size.MaxSize = maxVal * maxMultiplier
+
 		if ui.onUpdate != nil {
 			ui.onUpdate()
 		}
-	})
-	preset10MB.Importance = widget.LowImportance
+	}
 
-	preset100MB := widget.NewButton("< 100 Mo", func() {
-		maxEntry.SetText("100")
-		ui.config.Filters.Size.MaxSize = 100 * 1024 * 1024
-		if ui.onUpdate != nil {
-			ui.onUpdate()
-		}
-	})
-	preset100MB.Importance = widget.LowImportance
-
-	preset1GB := widget.NewButton("< 1 Go", func() {
-		maxEntry.SetText("1024")
-		ui.config.Filters.Size.MaxSize = 1024 * 1024 * 1024
-		if ui.onUpdate != nil {
-			ui.onUpdate()
-		}
-	})
-	preset1GB.Importance = widget.LowImportance
-
-	header := container.NewHBox(titleLabel, layout.NewSpacer(), enableCheck)
-
-	minRow := container.NewBorder(nil, nil, minLabel, nil, minEntry)
-	maxRow := container.NewBorder(nil, nil, maxLabel, nil, maxEntry)
-	presetsRow := container.NewHBox(presetsLabel, preset10MB, preset100MB, preset1GB)
+	minEntry.OnChanged = func(s string) { updateSize() }
+	maxEntry.OnChanged = func(s string) { updateSize() }
+	minUnitSelect.OnChanged = func(s string) { updateSize() }
+	maxUnitSelect.OnChanged = func(s string) { updateSize() }
 
 	return container.NewVBox(
-		header,
+		titleLabel,
 		widget.NewSeparator(),
-		minRow,
-		maxRow,
-		presetsRow,
+		container.NewHBox(minLabel, minEntryContainer, minUnitSelect),
+		container.NewHBox(maxLabel, maxEntryContainer, maxUnitSelect),
 	)
+}
+
+// getMultiplier retourne le multiplicateur pour l'unité
+func getMultiplier(unit string) int64 {
+	switch unit {
+	case "Ko":
+		return 1024
+	case "Mo":
+		return 1024 * 1024
+	case "Go":
+		return 1024 * 1024 * 1024
+	default:
+		return 1
+	}
 }
 
 // CreatePathFilterPanel crée le panneau de filtrage par chemin
 func (ui *FilterConfigUI) CreatePathFilterPanel() *fyne.Container {
-	titleLabel := widget.NewLabelWithStyle("📂 Filtrage par Chemin", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	titleLabel := widget.NewLabelWithStyle("Filtrage par Chemin", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	enableCheck := widget.NewCheck("Activer", func(enabled bool) {
-		ui.config.Filters.Path.Enabled = enabled
-		if ui.onUpdate != nil {
-			ui.onUpdate()
-		}
-	})
-	enableCheck.SetChecked(ui.config.Filters.Path.Enabled)
-
-	// Options
-	hiddenCheck := widget.NewCheck("Exclure fichiers cachés", func(checked bool) {
+	// Exclure fichiers cachés
+	hiddenCheck := widget.NewCheck("Exclure les fichiers cachés", func(checked bool) {
 		ui.config.Filters.Path.ExcludeHidden = checked
 		if ui.onUpdate != nil {
 			ui.onUpdate()
@@ -479,99 +435,139 @@ func (ui *FilterConfigUI) CreatePathFilterPanel() *fyne.Container {
 	})
 	hiddenCheck.SetChecked(ui.config.Filters.Path.ExcludeHidden)
 
-	symlinkCheck := widget.NewCheck("Exclure liens symboliques", func(checked bool) {
-		ui.config.Filters.Path.ExcludeSymlinks = checked
-		if ui.onUpdate != nil {
-			ui.onUpdate()
-		}
-	})
-	symlinkCheck.SetChecked(ui.config.Filters.Path.ExcludeSymlinks)
-
 	// Liste des dossiers exclus
 	foldersLabel := widget.NewLabel("Dossiers exclus:")
-	foldersList := widget.NewLabel(strings.Join(ui.config.Filters.Path.ExcludedFolders, ", "))
-	foldersList.Wrapping = fyne.TextWrapWord
+
+	// Déclarer la variable avant pour pouvoir l'utiliser dans le callback
+	var foldersList *widget.List
+	foldersList = widget.NewList(
+		func() int {
+			return len(ui.config.Filters.Path.ExcludedFolders)
+		},
+		func() fyne.CanvasObject {
+			return container.NewHBox(widget.NewLabel("Dossier"), widget.NewButton("×", nil))
+		},
+		func(id widget.ListItemID, item fyne.CanvasObject) {
+			box := item.(*fyne.Container)
+			label := box.Objects[0].(*widget.Label)
+			btn := box.Objects[1].(*widget.Button)
+
+			if id < len(ui.config.Filters.Path.ExcludedFolders) {
+				folder := ui.config.Filters.Path.ExcludedFolders[id]
+				label.SetText(folder)
+				btn.OnTapped = func() {
+					ui.config.Filters.Path.RemoveExcludedFolder(folder)
+					foldersList.Refresh()
+					if ui.onUpdate != nil {
+						ui.onUpdate()
+					}
+				}
+			}
+		},
+	)
+
+	// Wrapper avec scroll et taille minimum
+	foldersScroll := container.NewVScroll(foldersList)
+	foldersScroll.SetMinSize(fyne.NewSize(200, 100))
 
 	// Bouton ajouter dossier
-	addFolderBtn := widget.NewButton("➕ Ajouter dossier", func() {
+	addFolderBtn := widget.NewButton("Ajouter dossier", func() {
 		entry := widget.NewEntry()
 		entry.SetPlaceHolder("ex: node_modules")
 
 		dialog.ShowCustomConfirm("Ajouter un dossier à exclure", "Ajouter", "Annuler",
-			container.NewVBox(widget.NewLabel("Nom du dossier:"), entry),
-			func(ok bool) {
+			container.NewVBox(
+				widget.NewLabel("Nom du dossier:"),
+				entry,
+			), func(ok bool) {
 				if ok && entry.Text != "" {
 					ui.config.Filters.Path.AddExcludedFolder(entry.Text)
-					foldersList.SetText(strings.Join(ui.config.Filters.Path.ExcludedFolders, ", "))
+					foldersList.Refresh()
 					if ui.onUpdate != nil {
 						ui.onUpdate()
 					}
-					addLog(fmt.Sprintf("📁 Dossier exclu ajouté: %s", entry.Text))
 				}
 			}, ui.win)
 	})
-	addFolderBtn.Importance = widget.MediumImportance
-
-	header := container.NewHBox(titleLabel, layout.NewSpacer(), enableCheck)
 
 	return container.NewVBox(
-		header,
+		titleLabel,
 		widget.NewSeparator(),
 		hiddenCheck,
-		symlinkCheck,
-		widget.NewSeparator(),
 		foldersLabel,
-		foldersList,
+		foldersScroll,
 		addFolderBtn,
 	)
 }
 
-// CreateFullFilterPanel crée le panneau complet des filtres
+// CreateFullFilterPanel crée le panneau complet avec tous les filtres
+// Avec boutons Appliquer, Réinitialiser, Exporter, Importer
 func (ui *FilterConfigUI) CreateFullFilterPanel() *fyne.Container {
 	extPanel := ui.CreateExtensionFilterPanel()
 	sizePanel := ui.CreateSizeFilterPanel()
 	pathPanel := ui.CreatePathFilterPanel()
 
-	// Boutons d'action globaux
-	saveBtn := widget.NewButton("💾 Sauvegarder", func() {
-		if err := SaveFiltersToConfig(ui.config); err != nil {
-			dialog.ShowError(err, ui.win)
-		} else {
-			addLog("✅ Filtres sauvegardés dans la configuration")
-			dialog.ShowInformation("Succès", "Les filtres ont été sauvegardés.", ui.win)
-		}
-	})
-	saveBtn.Importance = widget.HighImportance
+	// Checkbox pour sauvegarder lors de l'application
+	saveOnApplyCheck := widget.NewCheck("Enregistrer la configuration", nil)
+	saveOnApplyCheck.SetChecked(false)
 
-	loadBtn := widget.NewButton("📂 Charger", func() {
-		LoadFiltersFromConfig(ui.config)
-		ui.refreshTags()
+	// Bouton Appliquer
+	applyBtn := widget.NewButton("Appliquer", func() {
+		// Activer le filtrage si des extensions sont définies
+		if len(ui.config.Filters.Extension.GetExtensions()) > 0 {
+			ui.config.Filters.Extension.SetEnabled(true)
+		}
+
+		if saveOnApplyCheck.Checked {
+			if err := SaveFiltersToConfig(ui.config); err != nil {
+				dialog.ShowError(err, ui.win)
+			} else {
+				addLog("Filtres sauvegardés")
+			}
+		}
+
 		if ui.onUpdate != nil {
 			ui.onUpdate()
 		}
-		addLog("✅ Filtres chargés depuis la configuration")
+		addLog("Filtres appliqués")
 	})
-	loadBtn.Importance = widget.MediumImportance
+	applyBtn.Importance = widget.HighImportance
 
-	resetBtn := widget.NewButton("🔄 Réinitialiser", func() {
+	// Bouton Réinitialiser
+	resetBtn := widget.NewButton("Réinitialiser", func() {
 		dialog.ShowConfirm("Confirmer", "Réinitialiser tous les filtres?", func(ok bool) {
 			if ok {
 				ui.config.Filters = NewFilterConfig().Filters
+				ui.config.Filters.Extension.SetEnabled(false)
 				ui.refreshTags()
 				if ui.onUpdate != nil {
 					ui.onUpdate()
 				}
-				addLog("🔄 Filtres réinitialisés")
+				addLog("Filtres réinitialisés")
 			}
 		}, ui.win)
 	})
 	resetBtn.Importance = widget.DangerImportance
 
+	// Bouton Exporter
+	exportBtn := widget.NewButton("Exporter", func() {
+		ui.exportFilters()
+	})
+	exportBtn.Importance = widget.MediumImportance
+
+	// Bouton Importer
+	importBtn := widget.NewButton("Importer", func() {
+		ui.importFilters()
+	})
+	importBtn.Importance = widget.MediumImportance
+
+	// Layout des boutons d'action
 	actionsRow := container.NewHBox(
-		saveBtn,
-		loadBtn,
-		layout.NewSpacer(),
+		applyBtn,
 		resetBtn,
+		layout.NewSpacer(),
+		exportBtn,
+		importBtn,
 	)
 
 	return container.NewVBox(
@@ -579,8 +575,88 @@ func (ui *FilterConfigUI) CreateFullFilterPanel() *fyne.Container {
 		container.NewPadded(sizePanel),
 		container.NewPadded(pathPanel),
 		widget.NewSeparator(),
+		saveOnApplyCheck,
 		container.NewPadded(actionsRow),
 	)
+}
+
+// FilterExportData structure pour l'export des filtres
+type FilterExportData struct {
+	Extensions      []string `json:"extensions"`
+	ExtensionMode   int      `json:"extension_mode"`
+	MinSize         int64    `json:"min_size"`
+	MaxSize         int64    `json:"max_size"`
+	ExcludeHidden   bool     `json:"exclude_hidden"`
+	ExcludedFolders []string `json:"excluded_folders"`
+}
+
+// exportFilters exporte les filtres vers un fichier JSON
+func (ui *FilterConfigUI) exportFilters() {
+	exportData := FilterExportData{
+		Extensions:      ui.config.Filters.Extension.GetExtensions(),
+		ExtensionMode:   int(ui.config.Filters.Extension.GetMode()),
+		MinSize:         ui.config.Filters.Size.MinSize,
+		MaxSize:         ui.config.Filters.Size.MaxSize,
+		ExcludeHidden:   ui.config.Filters.Path.ExcludeHidden,
+		ExcludedFolders: ui.config.Filters.Path.ExcludedFolders,
+	}
+
+	data, err := json.MarshalIndent(exportData, "", "  ")
+	if err != nil {
+		dialog.ShowError(err, ui.win)
+		return
+	}
+
+	// Sauvegarder dans un fichier
+	exportPath := "spiraly_filters.json"
+	err = os.WriteFile(exportPath, data, 0644)
+	if err != nil {
+		dialog.ShowError(err, ui.win)
+		return
+	}
+
+	dialog.ShowInformation("Export réussi", fmt.Sprintf("Filtres exportés vers: %s", exportPath), ui.win)
+	addLog(fmt.Sprintf("Filtres exportés vers %s", exportPath))
+}
+
+// importFilters importe les filtres depuis un fichier JSON
+func (ui *FilterConfigUI) importFilters() {
+	dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, ui.win)
+			return
+		}
+		if reader == nil {
+			return
+		}
+		defer reader.Close()
+
+		var exportData FilterExportData
+		decoder := json.NewDecoder(reader)
+		if err := decoder.Decode(&exportData); err != nil {
+			dialog.ShowError(fmt.Errorf("Fichier invalide: %v", err), ui.win)
+			return
+		}
+
+		// Appliquer les données importées
+		ui.config.Filters.Extension.Clear()
+		for _, ext := range exportData.Extensions {
+			ui.config.Filters.Extension.AddExtension(ext)
+		}
+		ui.config.Filters.Extension.SetMode(FilterMode(exportData.ExtensionMode))
+		ui.config.Filters.Size.MinSize = exportData.MinSize
+		ui.config.Filters.Size.MaxSize = exportData.MaxSize
+		ui.config.Filters.Path.ExcludeHidden = exportData.ExcludeHidden
+		ui.config.Filters.Path.ExcludedFolders = exportData.ExcludedFolders
+
+		ui.refreshTags()
+		if ui.onUpdate != nil {
+			ui.onUpdate()
+		}
+
+		dialog.ShowInformation("Import réussi", "Filtres importés avec succès", ui.win)
+		addLog("Filtres importés")
+	}, ui.win)
 }
 
 // ShowFilterDialog affiche le dialogue de configuration des filtres
@@ -589,18 +665,16 @@ func ShowFilterDialog(config *FilterConfig, win fyne.Window, onUpdate func()) {
 	content := ui.CreateFullFilterPanel()
 
 	scroll := container.NewVScroll(content)
-	scroll.SetMinSize(fyne.NewSize(500, 450))
+	scroll.SetMinSize(fyne.NewSize(500, 500))
 
-	dialog.ShowCustom("⚙️ Configuration des Filtres", "Fermer", scroll, win)
+	dialog.ShowCustom("Configuration des Filtres", "Fermer", scroll, win)
 }
 
 // CreateFilterIndicator crée un indicateur de filtres actifs pour l'UI
 func CreateFilterIndicator(config *FilterConfig) *fyne.Container {
-	icon := widget.NewLabel("🔍")
-	
 	summary := config.GetSummary()
 	label := widget.NewLabel(summary)
 	label.TextStyle = fyne.TextStyle{Italic: true}
 
-	return container.NewHBox(icon, label)
+	return container.NewHBox(label)
 }

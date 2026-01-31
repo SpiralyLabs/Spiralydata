@@ -112,15 +112,18 @@ func (s *Server) sendTreeRecursiveCount(ws *websocket.Conn, basePath, relPath st
 }
 
 func (s *Server) sendSelectedFiles(ws *websocket.Conn, items []string) {
-	addLog("📦 Envoi des fichiers sélectionnés...")
+	addLog(fmt.Sprintf("📤 Envoi de %d elements...", len(items)))
 	
-	sent := 0
+	filesSent := 0
+	dirsSent := 0
+	errors := 0
 	
 	for _, itemPath := range items {
 		fullPath := filepath.Join(s.WatchDir, filepath.FromSlash(itemPath))
-		info, err := os.Stat(fullPath)
 		
+		info, err := os.Stat(fullPath)
 		if err != nil {
+			errors++
 			continue
 		}
 		
@@ -131,31 +134,34 @@ func (s *Server) sendSelectedFiles(ws *websocket.Conn, items []string) {
 				IsDir:    true,
 				Origin:   "server",
 			})
-			sent++
-			time.Sleep(80 * time.Millisecond)
+			dirsSent++
+			time.Sleep(30 * time.Millisecond)
 		} else {
-			data, err := readFileWithRetry(fullPath)
+			data, err := os.ReadFile(fullPath)
 			if err != nil {
+				errors++
 				continue
 			}
+			
+			// Envoyer même si vide (le client gérera)
+			encoded := base64.StdEncoding.EncodeToString(data)
 			
 			ws.WriteJSON(FileChange{
 				FileName: itemPath,
 				Op:       "create",
-				Content:  base64.StdEncoding.EncodeToString(data),
+				Content:  encoded,
 				IsDir:    false,
 				Origin:   "server",
 			})
-			sent++
-			time.Sleep(100 * time.Millisecond)
-			
-			if sent > 0 && sent%10 == 0 {
-				time.Sleep(150 * time.Millisecond)
-			}
+			filesSent++
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 	
-	addLog(fmt.Sprintf("✅ %d fichiers envoyés", sent))
+	addLog(fmt.Sprintf("✅ Envoyes: %d dossiers, %d fichiers", dirsSent, filesSent))
+	if errors > 0 {
+		addLog(fmt.Sprintf("⚠️ %d erreurs", errors))
+	}
 }
 
 func (s *Server) sendDirRecursiveWithDelay(ws *websocket.Conn, basePath, relPath string, level int) {
@@ -186,14 +192,14 @@ func (s *Server) sendDirRecursiveWithDelay(ws *websocket.Conn, basePath, relPath
 			Origin:   "server",
 		})
 		
-		baseDelay := 80 * time.Millisecond
+		baseDelay := 50 * time.Millisecond
 		if level > 2 {
-			baseDelay = 50 * time.Millisecond
+			baseDelay = 30 * time.Millisecond
 		}
 		time.Sleep(baseDelay)
 		
 		if i > 0 && i%5 == 0 {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
 		
 		s.sendDirRecursiveWithDelay(ws, basePath, filepath.Join(relPath, entry.Name()), level+1)
@@ -203,23 +209,25 @@ func (s *Server) sendDirRecursiveWithDelay(ws *websocket.Conn, basePath, relPath
 		itemRelPath := filepath.ToSlash(filepath.Join(relPath, entry.Name()))
 		fullFilePath := filepath.Join(basePath, relPath, entry.Name())
 		
-		data, err := readFileWithRetry(fullFilePath)
+		data, err := os.ReadFile(fullFilePath)
 		if err != nil {
 			continue
 		}
 		
+		encoded := base64.StdEncoding.EncodeToString(data)
+		
 		ws.WriteJSON(FileChange{
 			FileName: itemRelPath,
 			Op:       "create",
-			Content:  base64.StdEncoding.EncodeToString(data),
+			Content:  encoded,
 			IsDir:    false,
 			Origin:   "server",
 		})
 		
-		time.Sleep(60 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 		
 		if i > 0 && i%10 == 0 {
-			time.Sleep(150 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }

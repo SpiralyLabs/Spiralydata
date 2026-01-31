@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,39 +16,43 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
 
+// Variables globales pour la gestion de l'interface
 var (
-	logWidget      *widget.Entry
-	logScroll      *container.Scroll
-	logs           []string
-	maxLogs        = 100
-	myApp          fyne.App
-	myWindow       fyne.Window
-	logMutex       sync.Mutex
-	logTicker      *time.Ticker
-	logNeedsUpdate bool
-	logBuffer      []string
-	logBufferMu    sync.Mutex
-	statusBar      *StatusBar
-	shortcutHandler *ShortcutHandler
+	logWidget       *widget.Entry      // Widget d'affichage des logs
+	logScroll       *container.Scroll  // Conteneur scrollable pour les logs
+	logs            []string           // Liste des messages de log
+	maxLogs         = 100              // Nombre maximum de logs à conserver
+	myApp           fyne.App           // Instance principale de l'application
+	myWindow        fyne.Window        // Fenêtre principale
+	logMutex        sync.Mutex         // Mutex pour l'accès concurrent aux logs
+	logTicker       *time.Ticker       // Timer pour la mise à jour des logs
+	logNeedsUpdate  bool               // Flag indiquant si les logs doivent être rafraîchis
+	logBuffer       []string           // Buffer temporaire pour les logs
+	logBufferMu     sync.Mutex         // Mutex pour le buffer de logs
+	statusBar       *StatusBar         // Barre de statut
+	shortcutHandler *ShortcutHandler   // Gestionnaire de raccourcis clavier
 )
 
 // Constantes pour les dimensions de fenêtre
 const (
-	MinWindowWidth  float32 = 800
-	MinWindowHeight float32 = 500
-	DefaultWidth    float32 = 1100
-	DefaultHeight   float32 = 650
+	MinWindowWidth  float32 = 800  // Largeur minimale de la fenêtre
+	MinWindowHeight float32 = 500  // Hauteur minimale de la fenêtre
+	DefaultWidth    float32 = 1100 // Largeur par défaut
+	DefaultHeight   float32 = 650  // Hauteur par défaut
 )
 
+// main est le point d'entrée de l'application
 func main() {
 	StartGUI()
 }
 
-// addLog avec buffering pour éviter les freezes
+// addLog ajoute un message au buffer de logs avec timestamp
+// Utilise un buffer pour éviter les freezes lors d'ajouts fréquents
 func addLog(message string) {
 	timestamp := time.Now().Format("15:04:05")
 	logEntry := fmt.Sprintf("[%s] %s", timestamp, message)
@@ -57,7 +62,8 @@ func addLog(message string) {
 	logBufferMu.Unlock()
 }
 
-// flushLogBuffer transfère le buffer vers les logs principaux
+// flushLogBuffer transfère les logs du buffer vers la liste principale
+// Appelé périodiquement par startLogUpdater
 func flushLogBuffer() {
 	logBufferMu.Lock()
 	if len(logBuffer) == 0 {
@@ -70,7 +76,7 @@ func flushLogBuffer() {
 
 	logMutex.Lock()
 	logs = append(logs, buffer...)
-	// Limiter le nombre de logs
+	// Limiter le nombre de logs conservés
 	if len(logs) > maxLogs {
 		logs = logs[len(logs)-maxLogs:]
 	}
@@ -78,12 +84,13 @@ func flushLogBuffer() {
 	logMutex.Unlock()
 }
 
+// startLogUpdater démarre le timer de mise à jour des logs
+// Met à jour l'affichage toutes les 150ms si nécessaire
 func startLogUpdater() {
 	logTicker = time.NewTicker(150 * time.Millisecond)
 
 	go func() {
 		for range logTicker.C {
-			// Flush le buffer d'abord
 			flushLogBuffer()
 
 			logMutex.Lock()
@@ -96,7 +103,6 @@ func startLogUpdater() {
 				text := strings.Join(logs, "\n")
 				logMutex.Unlock()
 
-				// Mise à jour UI dans le thread principal
 				if myWindow != nil {
 					myWindow.Canvas().Refresh(logWidget)
 				}
@@ -109,37 +115,38 @@ func startLogUpdater() {
 	}()
 }
 
-// getPublicIP avec timeout pour éviter les blocages
+// getPublicIP récupère l'adresse IP publique via une API externe
+// Timeout de 5 secondes pour éviter les blocages
 func getPublicIP() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.ipify.org?format=text", nil)
 	if err != nil {
-		return "Unknown"
+		return "Inconnue"
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "Unknown"
+		return "Inconnue"
 	}
 	defer resp.Body.Close()
 
 	ip, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "Unknown"
+		return "Inconnue"
 	}
 
-	return string(ip)
+	return strings.TrimSpace(string(ip))
 }
 
+// getLocalIP récupère l'adresse IP locale de la machine
 func getLocalIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return "Unknown"
+		return "127.0.0.1"
 	}
-
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() != nil {
@@ -150,72 +157,177 @@ func getLocalIP() string {
 	return "127.0.0.1"
 }
 
-// saveWindowConfig sauvegarde la configuration de la fenêtre
-func saveWindowConfig() {
-	if myWindow == nil {
-		return
-	}
+// StartGUI initialise et démarre l'interface graphique principale
+func StartGUI() {
+	myApp = app.NewWithID("com.spiralydata.app")
+
+	// Charger la configuration et appliquer le thème
 	config, _ := LoadConfig()
 	if config == nil {
-		config = &AppConfig{}
+		config = &AppConfig{DarkTheme: true, ShowStatusBar: true, LogsMaxCount: 100}
 	}
-	size := myWindow.Canvas().Size()
-	config.WindowWidth = size.Width
-	config.WindowHeight = size.Height
-	config.DarkTheme = (GetCurrentTheme() == ThemeDark)
-	SaveConfig(config)
-}
 
-// loadWindowSize charge les dimensions sauvegardées
-func loadWindowSize() (float32, float32) {
-	config, err := LoadConfig()
-	if err != nil || config.WindowWidth < MinWindowWidth || config.WindowHeight < MinWindowHeight {
-		return DefaultWidth, DefaultHeight
-	}
-	return config.WindowWidth, config.WindowHeight
-}
-
-// loadTheme charge le thème sauvegardé
-func loadTheme() ThemeType {
-	config, err := LoadConfig()
-	if err != nil {
-		return ThemeDark
-	}
+	// Thème sombre par défaut
 	if config.DarkTheme {
-		return ThemeDark
+		SetTheme(ThemeDark)
+	} else {
+		SetTheme(ThemeLight)
 	}
-	return ThemeLight
+
+	myWindow = myApp.NewWindow("Spiralydata")
+
+	// Configurer la taille de la fenêtre
+	width := config.WindowWidth
+	height := config.WindowHeight
+	if width < MinWindowWidth {
+		width = DefaultWidth
+	}
+	if height < MinWindowHeight {
+		height = DefaultHeight
+	}
+	myWindow.Resize(fyne.NewSize(width, height))
+
+	// Permettre le redimensionnement complet (horizontal ET vertical)
+	myWindow.SetFixedSize(false)
+
+	// Initialiser le widget de logs
+	logWidget = widget.NewMultiLineEntry()
+	logWidget.Wrapping = fyne.TextWrapWord
+	logWidget.Disable()
+	logScroll = container.NewVScroll(logWidget)
+	logScroll.SetMinSize(fyne.NewSize(300, 200))
+
+	// Initialiser la barre de statut
+	statusBar = NewStatusBar()
+
+	// Initialiser les raccourcis clavier
+	shortcutHandler = NewShortcutHandler()
+	shortcutHandler.SetupWindowShortcuts(myWindow)
+
+	startLogUpdater()
+
+	addLog("Application démarrée")
+
+	// Fermeture propre de l'application
+	myWindow.SetOnClosed(func() {
+		saveWindowConfig()
+		if logTicker != nil {
+			logTicker.Stop()
+		}
+	})
+
+	// Tentative de connexion automatique
+	if !tryAutoConnect(myWindow) {
+		// Afficher le menu principal
+		split := container.NewHSplit(
+			createMainMenu(myWindow),
+			createLogPanel(),
+		)
+		split.Offset = 0.5
+
+		mainContent := container.NewBorder(
+			nil,
+			statusBar.GetContainer(),
+			nil, nil,
+			split,
+		)
+
+		myWindow.SetContent(mainContent)
+	} else {
+		addLog("Connexion automatique en cours...")
+	}
+
+	myWindow.ShowAndRun()
 }
 
-// createLogPanel crée le panneau de logs avec barre de recherche
-func createLogPanel() *fyne.Container {
-	// Titre et boutons d'action
-	titleLabel := widget.NewLabelWithStyle("📋 Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+// createMainMenu crée le menu principal de l'application
+// Sans émojis sur les boutons avec texte, sans numéro de version
+func createMainMenu(win fyne.Window) fyne.CanvasObject {
+	// Titre stylisé
+	title := canvas.NewText("SPIRALYDATA", color.White)
+	title.TextSize = 32
+	title.Alignment = fyne.TextAlignCenter
+	title.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Barre de recherche pour filtrer les logs
+	subtitle := widget.NewLabel("Synchronisation de fichiers intelligente")
+	subtitle.Alignment = fyne.TextAlignCenter
+
+	// Boutons du menu principal (sans émojis)
+	hostBtn := widget.NewButton("Mode Hôte (Host)", func() {
+		showHostSetup(win)
+	})
+	hostBtn.Importance = widget.HighImportance
+
+	userBtn := widget.NewButton("Mode Utilisateur (User)", func() {
+		showUserSetup(win)
+	})
+	userBtn.Importance = widget.HighImportance
+
+	settingsBtn := widget.NewButton("Paramètres", func() {
+		showSettings(win)
+	})
+	settingsBtn.Importance = widget.MediumImportance
+
+	quitBtn := widget.NewButton("Quitter", func() {
+		saveWindowConfig()
+		myApp.Quit()
+	})
+	quitBtn.Importance = widget.LowImportance
+
+	// Info raccourcis
+	shortcutsInfo := widget.NewLabel("Ctrl+T: Changer thème | F11: Plein écran")
+	shortcutsInfo.Alignment = fyne.TextAlignCenter
+	shortcutsInfo.TextStyle = fyne.TextStyle{Italic: true}
+
+	buttonsContainer := container.NewVBox(
+		hostBtn,
+		userBtn,
+		widget.NewSeparator(),
+		settingsBtn,
+		layout.NewSpacer(),
+		quitBtn,
+	)
+
+	return container.NewVBox(
+		layout.NewSpacer(),
+		container.NewCenter(title),
+		container.NewCenter(subtitle),
+		layout.NewSpacer(),
+		container.NewCenter(container.NewPadded(buttonsContainer)),
+		layout.NewSpacer(),
+		container.NewCenter(shortcutsInfo),
+		layout.NewSpacer(),
+	)
+}
+
+// createLogPanel crée le panneau de logs avec recherche, copie et effacement
+func createLogPanel() *fyne.Container {
+	titleLabel := widget.NewLabelWithStyle("Logs", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+
+	// Barre de recherche
 	searchEntry := widget.NewEntry()
-	searchEntry.SetPlaceHolder("🔍 Filtrer les logs...")
+	searchEntry.SetPlaceHolder("Rechercher...")
 	searchEntry.OnChanged = func(query string) {
 		filterLogs(query)
 	}
 
-	// Bouton pour vider les logs
+	// Bouton effacer (emoji seul OK)
 	clearBtn := widget.NewButton("🗑️", func() {
 		logMutex.Lock()
 		logs = []string{}
 		logNeedsUpdate = true
 		logMutex.Unlock()
-		addLog("📋 Logs effacés")
+		addLog("Logs effacés")
 	})
 	clearBtn.Importance = widget.LowImportance
 
-	// Bouton pour copier les logs
+	// Bouton copier (emoji seul OK)
 	copyBtn := widget.NewButton("📋", func() {
 		logMutex.Lock()
 		text := strings.Join(logs, "\n")
 		logMutex.Unlock()
 		myWindow.Clipboard().SetContent(text)
-		addLog("📋 Logs copiés dans le presse-papiers")
+		addLog("Logs copiés dans le presse-papiers")
 	})
 	copyBtn.Importance = widget.LowImportance
 
@@ -233,12 +345,8 @@ func createLogPanel() *fyne.Container {
 	)
 }
 
-// filterLogs filtre les logs affichés
+// filterLogs filtre les logs affichés selon la requête de recherche
 func filterLogs(query string) {
-	if logWidget == nil {
-		return
-	}
-
 	logMutex.Lock()
 	defer logMutex.Unlock()
 
@@ -257,173 +365,52 @@ func filterLogs(query string) {
 	logWidget.SetText(strings.Join(filtered, "\n"))
 }
 
-func StartGUI() {
-	myApp = app.NewWithID("com.spiraly.sync")
+// saveWindowConfig sauvegarde la configuration de la fenêtre
+func saveWindowConfig() {
+	config, _ := LoadConfig()
+	if config == nil {
+		config = &AppConfig{}
+	}
+	size := myWindow.Canvas().Size()
+	config.WindowWidth = size.Width
+	config.WindowHeight = size.Height
+	config.DarkTheme = GetCurrentTheme() == ThemeDark
+	SaveConfig(config)
+}
 
-	// Charger et appliquer le thème sauvegardé
-	savedTheme := loadTheme()
-	currentTheme = savedTheme
-	myApp.Settings().SetTheme(NewAppTheme(savedTheme))
-
-	// Initialiser et charger les filtres
-	InitFilterConfig()
-	LoadFiltersFromConfig(GetFilterConfig())
-
-	// Charger la configuration de synchronisation
-	SetSyncConfig(LoadSyncConfigFromFile())
-
-	startLogUpdater()
-
-	myWindow = myApp.NewWindow("Spiralydata")
-
-	// Charger les dimensions sauvegardées
-	width, height := loadWindowSize()
-	myWindow.Resize(fyne.NewSize(width, height))
-
-	// Définir la taille minimale
-	myWindow.SetFixedSize(false)
-
-	// Créer la barre de statut
-	statusBar = NewStatusBar()
-
-	// Configurer les raccourcis clavier
-	shortcutHandler = NewShortcutHandler()
-	shortcutHandler.Register("clearlogs", func() {
-		logMutex.Lock()
-		logs = []string{}
-		logNeedsUpdate = true
-		logMutex.Unlock()
-		addLog("📋 Logs effacés (Ctrl+L)")
-	})
-	shortcutHandler.SetupWindowShortcuts(myWindow)
-
-	// Sauvegarder la configuration à la fermeture
-	myWindow.SetOnClosed(func() {
-		saveWindowConfig()
-	})
-
-	logWidget = widget.NewEntry()
-	logWidget.SetText("🚀 Bienvenue dans Spiralydata\n💡 Raccourcis: Ctrl+T (thème), Ctrl+L (vider logs), F11 (plein écran)\n")
-	logWidget.MultiLine = true
-	logWidget.Wrapping = fyne.TextWrapWord
-	logWidget.Disable()
-	logWidget.TextStyle = fyne.TextStyle{Monospace: true}
-
-	// Réduire la taille minimale des logs pour permettre un meilleur redimensionnement
-	logScroll = container.NewVScroll(logWidget)
-	logScroll.SetMinSize(fyne.NewSize(250, 150))
-
-	logContainer := createLogPanel()
-
-	if !tryAutoConnect(myWindow) {
-		content := createMainMenu(myWindow)
-
-		split := container.NewHSplit(
-			content,
-			logContainer,
-		)
-		split.Offset = 0.55
-
-		// Ajouter la barre de statut en bas
-		mainContent := container.NewBorder(
+// showSettings affiche la page des paramètres depuis le menu principal
+func showSettings(win fyne.Window) {
+	showSettingsWithBack(win, func() {
+		win.SetContent(container.NewBorder(
 			nil,
 			statusBar.GetContainer(),
 			nil, nil,
-			split,
-		)
-
-		myWindow.SetContent(mainContent)
-	} else {
-		addLog("🔄 Connexion automatique en cours...")
-	}
-
-	myWindow.ShowAndRun()
-}
-
-func createMainMenu(win fyne.Window) fyne.CanvasObject {
-	// Logo/Titre avec style
-	title := canvas.NewText("SPIRALYDATA", color.White)
-	title.TextSize = 32
-	title.Alignment = fyne.TextAlignCenter
-	title.TextStyle = fyne.TextStyle{Bold: true}
-
-	subtitle := widget.NewLabel("📁 Synchronisation de fichiers intelligente")
-	subtitle.Alignment = fyne.TextAlignCenter
-
-	// Version
-	versionLabel := widget.NewLabel("v2.0.0")
-	versionLabel.Alignment = fyne.TextAlignCenter
-	versionLabel.TextStyle = fyne.TextStyle{Italic: true}
-
-	// Boutons avec tooltips
-	hostBtn := widget.NewButton("🖥️ Mode Hôte (Host)", func() {
-		showHostSetup(win)
-	})
-	hostBtn.Importance = widget.HighImportance
-
-	userBtn := widget.NewButton("👤 Mode Utilisateur (User)", func() {
-		showUserSetup(win)
-	})
-	userBtn.Importance = widget.HighImportance
-
-	// Bouton paramètres
-	settingsBtn := widget.NewButton("⚙️ Paramètres", func() {
-		showSettings(win)
-	})
-	settingsBtn.Importance = widget.MediumImportance
-
-	quitBtn := widget.NewButton("❌ Quitter", func() {
-		saveWindowConfig()
-		myApp.Quit()
-	})
-	quitBtn.Importance = widget.LowImportance
-
-	// Info sur les raccourcis
-	shortcutsInfo := widget.NewLabel("💡 Ctrl+T: Changer thème | F11: Plein écran")
-	shortcutsInfo.Alignment = fyne.TextAlignCenter
-	shortcutsInfo.TextStyle = fyne.TextStyle{Italic: true}
-
-	buttonsContainer := container.NewVBox(
-		hostBtn,
-		userBtn,
-		widget.NewSeparator(),
-		settingsBtn,
-		layout.NewSpacer(),
-		quitBtn,
-	)
-
-	return container.NewVBox(
-		layout.NewSpacer(),
-		container.NewCenter(title),
-		container.NewCenter(subtitle),
-		container.NewCenter(versionLabel),
-		layout.NewSpacer(),
-		container.NewCenter(container.NewPadded(
-			container.NewVBox(
-				buttonsContainer,
+			container.NewHSplit(
+				createMainMenu(win),
+				createLogPanel(),
 			),
-		)),
-		layout.NewSpacer(),
-		container.NewCenter(shortcutsInfo),
-		layout.NewSpacer(),
-	)
+		))
+	})
 }
 
-// showSettings affiche la page des paramètres
-func showSettings(win fyne.Window) {
+// showSettingsWithBack affiche les paramètres avec callback de retour personnalisé
+func showSettingsWithBack(win fyne.Window, backFunc func()) {
 	config, _ := LoadConfig()
 	if config == nil {
 		config = &AppConfig{DarkTheme: true, ShowStatusBar: true, LogsMaxCount: 100}
 	}
 
-	// Thème
-	themeLabel := widget.NewLabel("🎨 Thème")
+	// Sélection du thème
+	themeLabel := widget.NewLabel("Thème")
 	themeSelect := widget.NewSelect([]string{"Sombre", "Clair"}, func(selected string) {
 		if selected == "Sombre" {
 			SetTheme(ThemeDark)
+			config.DarkTheme = true
 		} else {
 			SetTheme(ThemeLight)
+			config.DarkTheme = false
 		}
+		SaveConfig(config)
 	})
 	if GetCurrentTheme() == ThemeDark {
 		themeSelect.SetSelected("Sombre")
@@ -432,7 +419,7 @@ func showSettings(win fyne.Window) {
 	}
 
 	// Nombre max de logs
-	logsLabel := widget.NewLabel("📋 Nombre max de logs")
+	logsLabel := widget.NewLabel("Nombre max de logs")
 	logsEntry := widget.NewEntry()
 	logsEntry.SetText(fmt.Sprintf("%d", maxLogs))
 	logsEntry.OnChanged = func(s string) {
@@ -442,10 +429,12 @@ func showSettings(win fyne.Window) {
 		}
 	}
 
-	// Réinitialiser la configuration
-	resetBtn := widget.NewButton("🔄 Réinitialiser la configuration", func() {
+	// Réinitialiser
+	resetBtn := widget.NewButton("Réinitialiser la configuration", func() {
 		SaveConfig(&AppConfig{DarkTheme: true, ShowStatusBar: true, LogsMaxCount: 100})
-		addLog("⚙️ Configuration réinitialisée")
+		SetTheme(ThemeDark)
+		themeSelect.SetSelected("Sombre")
+		addLog("Configuration réinitialisée")
 	})
 	resetBtn.Importance = widget.DangerImportance
 
@@ -459,20 +448,10 @@ func showSettings(win fyne.Window) {
 		resetBtn,
 	)
 
-	backBtn := widget.NewButton("⬅️ Retour", func() {
-		win.SetContent(container.NewBorder(
-			nil,
-			statusBar.GetContainer(),
-			nil, nil,
-			container.NewHSplit(
-				createMainMenu(win),
-				createLogPanel(),
-			),
-		))
-	})
+	backBtn := widget.NewButton("Retour", backFunc)
 
 	content := container.NewVBox(
-		widget.NewLabelWithStyle("⚙️ Paramètres", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Paramètres", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		layout.NewSpacer(),
 		formContent,
 		layout.NewSpacer(),
@@ -481,7 +460,7 @@ func showSettings(win fyne.Window) {
 	)
 
 	split := container.NewHSplit(
-		content,
+		container.NewVScroll(content),
 		createLogPanel(),
 	)
 	split.Offset = 0.5
@@ -494,23 +473,18 @@ func showSettings(win fyne.Window) {
 	))
 }
 
+// showHostSetup affiche la page de configuration du mode Hôte
 func showHostSetup(win fyne.Window) {
-	portLabel := widget.NewLabel("🌐 Port")
+	portLabel := widget.NewLabel("Port")
 	portLabel.Alignment = fyne.TextAlignLeading
 	portEntry := widget.NewEntry()
 	portEntry.SetPlaceHolder("ex: 1234")
 
-	idLabel := widget.NewLabel("🔑 ID du serveur (6 chiffres)")
+	// ID: minimum 6 caractères, pas de maximum
+	idLabel := widget.NewLabel("ID du serveur (6 caractères minimum)")
 	idLabel.Alignment = fyne.TextAlignLeading
 	idEntry := widget.NewEntry()
 	idEntry.SetPlaceHolder("ex: 123456")
-
-	// Validation en temps réel
-	idEntry.OnChanged = func(s string) {
-		if len(s) > 6 {
-			idEntry.SetText(s[:6])
-		}
-	}
 
 	// Section filtres
 	filterConfig := GetFilterConfig()
@@ -518,7 +492,7 @@ func showHostSetup(win fyne.Window) {
 	filterSummary.TextStyle = fyne.TextStyle{Italic: true}
 	filterSummary.Wrapping = fyne.TextWrapWord
 
-	filterBtn := widget.NewButton("🔍 Configurer les filtres", func() {
+	filterBtn := widget.NewButton("Configurer les filtres", func() {
 		ShowFilterDialog(filterConfig, win, func() {
 			filterSummary.SetText(filterConfig.GetSummary())
 		})
@@ -527,7 +501,7 @@ func showHostSetup(win fyne.Window) {
 
 	filterSection := container.NewVBox(
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("📁 Filtrage des fichiers", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Filtrage des fichiers", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		filterSummary,
 		filterBtn,
 	)
@@ -541,17 +515,18 @@ func showHostSetup(win fyne.Window) {
 		filterSection,
 	)
 
-	startBtn := widget.NewButton("🚀 Démarrer le serveur", func() {
+	startBtn := widget.NewButton("Démarrer le serveur", func() {
 		port := portEntry.Text
 		hostID := idEntry.Text
 
-		if len(hostID) != 6 {
-			addLog("❌ L'ID doit contenir 6 caractères")
+		// Validation: minimum 6 caractères
+		if len(hostID) < 6 {
+			addLog("L'ID doit contenir au moins 6 caractères")
 			return
 		}
 
 		if port == "" {
-			addLog("❌ Le port est requis")
+			addLog("Le port est requis")
 			return
 		}
 
@@ -559,7 +534,13 @@ func showHostSetup(win fyne.Window) {
 	})
 	startBtn.Importance = widget.HighImportance
 
-	backBtn := widget.NewButton("⬅️ Retour", func() {
+	settingsBtn := widget.NewButton("Paramètres", func() {
+		showSettingsWithBack(win, func() {
+			showHostSetup(win)
+		})
+	})
+
+	backBtn := widget.NewButton("Retour", func() {
 		win.SetContent(container.NewBorder(
 			nil,
 			statusBar.GetContainer(),
@@ -573,11 +554,12 @@ func showHostSetup(win fyne.Window) {
 
 	buttonsContainer := container.NewVBox(
 		startBtn,
+		settingsBtn,
 		backBtn,
 	)
 
 	content := container.NewVBox(
-		widget.NewLabelWithStyle("🖥️ Configuration du Serveur", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Configuration du Serveur", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		layout.NewSpacer(),
 		formContent,
 		layout.NewSpacer(),
@@ -586,7 +568,7 @@ func showHostSetup(win fyne.Window) {
 	)
 
 	split := container.NewHSplit(
-		content,
+		container.NewVScroll(content),
 		createLogPanel(),
 	)
 	split.Offset = 0.5
@@ -599,23 +581,24 @@ func showHostSetup(win fyne.Window) {
 	))
 }
 
+// showHostRunning affiche l'interface du serveur en cours d'exécution
 func showHostRunning(win fyne.Window, port, hostID string) {
-	addLog("🚀 Démarrage du serveur...")
+	addLog("Démarrage du serveur...")
 
 	localIP := getLocalIP()
-	publicIP := "⏳ Chargement..."
+	publicIP := "Chargement..."
 
 	// Carte d'information du serveur
 	serverInfoCard := NewStatCard("Serveur", "🖥️", "Démarrage...")
 
 	infoText := fmt.Sprintf(
-		"🖥️ SERVEUR EN DÉMARRAGE\n\n"+
-			"🔑 ID: %s\n"+
-			"🌐 Port: %s\n"+
-			"🏠 IP Locale: %s\n"+
-			"🌍 IP Publique: %s\n"+
-			"📍 Adresse: %s:%s\n\n"+
-			"👥 Clients connectés: 0",
+		"SERVEUR EN DÉMARRAGE\n\n"+
+			"ID: %s\n"+
+			"Port: %s\n"+
+			"IP Locale: %s\n"+
+			"IP Publique: %s\n"+
+			"Adresse: %s:%s\n\n"+
+			"Clients connectés: 0",
 		hostID, port, localIP, publicIP, publicIP, port,
 	)
 
@@ -629,6 +612,7 @@ func showHostRunning(win fyne.Window, port, hostID string) {
 
 	var currentServer *Server
 
+	// Animation de chargement
 	go func() {
 		for !stopLoading {
 			time.Sleep(100 * time.Millisecond)
@@ -639,59 +623,84 @@ func showHostRunning(win fyne.Window, port, hostID string) {
 				loadingIndex++
 			}
 		}
-		loadingLabel.SetText("✅ Serveur actif")
+		loadingLabel.SetText("Serveur actif")
 		loadingLabel.Refresh()
-		serverInfoCard.SetValue("Actif ✅")
 	}()
 
-	stopBtn := widget.NewButton("🛑 Arrêter le serveur", func() {
-		addLog("🛑 Arrêt du serveur...")
+	// Bouton déconnexion qui retourne à la page Host setup (pas fermer l'app)
+	disconnectBtn := widget.NewButton("Arrêter le serveur", func() {
+		addLog("Arrêt du serveur...")
 		stopLoading = true
-
 		if currentServer != nil {
 			currentServer.Stop()
 		}
-
 		statusBar.SetConnected(false, "")
-
-		win.SetContent(container.NewBorder(
-			nil,
-			statusBar.GetContainer(),
-			nil, nil,
-			container.NewHSplit(
-				createMainMenu(win),
-				createLogPanel(),
-			),
-		))
+		showHostSetup(win)
 	})
-	stopBtn.Importance = widget.DangerImportance
+	disconnectBtn.Importance = widget.DangerImportance
 
-	// Bouton copier l'adresse
-	copyAddrBtn := widget.NewButton("📋 Copier l'adresse", func() {
-		addr := fmt.Sprintf("%s:%s", localIP, port)
-		win.Clipboard().SetContent(addr)
-		addLog("📋 Adresse copiée: " + addr)
+	// Bouton filtres modifiable en direct
+	filterConfig := GetFilterConfig()
+	filterBtn := widget.NewButton("Filtres", func() {
+		ShowFilterDialog(filterConfig, win, func() {
+			addLog("Filtres mis a jour")
+		})
 	})
-	copyAddrBtn.Importance = widget.LowImportance
+	filterBtn.Importance = widget.MediumImportance
+
+	// Bouton sécurité (whitelist IP)
+	securityBtn := widget.NewButton("Securite", func() {
+		showHostSecurityDialog(win)
+	})
+	securityBtn.Importance = widget.MediumImportance
+
+	// Bouton télécharger une backup
+	backupBtn := widget.NewButton("Telecharger une backup", func() {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil || uri == nil {
+				return
+			}
+			go func() {
+				sourceDir := filepath.Join(getExecutableDir(), "Spiralydata")
+				timestamp := time.Now().Format("2006-01-02_15-04-05")
+				destDir := filepath.Join(uri.Path(), fmt.Sprintf("Backup_Spiralydata_%s", timestamp))
+				addLog(fmt.Sprintf("Backup vers: %s", destDir))
+				
+				err := copyDirRecursive(sourceDir, destDir)
+				if err != nil {
+					addLog(fmt.Sprintf("Erreur backup: %v", err))
+				} else {
+					addLog("Backup terminee avec succes")
+				}
+			}()
+		}, win)
+	})
+	backupBtn.Importance = widget.MediumImportance
+
+	// Boutons d'actions Host
+	actionsContainer := container.NewHBox(
+		filterBtn,
+		securityBtn,
+		backupBtn,
+	)
 
 	content := container.NewVBox(
-		widget.NewLabelWithStyle("ℹ️ Informations du Serveur", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		widget.NewSeparator(),
 		serverInfoCard.GetContainer(),
 		widget.NewSeparator(),
 		info,
 		widget.NewSeparator(),
 		loadingLabel,
+		widget.NewSeparator(),
+		container.NewCenter(actionsContainer),
 		layout.NewSpacer(),
-		container.NewHBox(
-			copyAddrBtn,
-			layout.NewSpacer(),
-			stopBtn,
-		),
+		container.NewCenter(container.NewPadded(disconnectBtn)),
 	)
 
+	// Ajouter du padding
+	paddedContent := container.NewPadded(content)
+
 	split := container.NewHSplit(
-		container.NewPadded(content),
+		container.NewVScroll(paddedContent),
 		createLogPanel(),
 	)
 	split.Offset = 0.5
@@ -703,19 +712,23 @@ func showHostRunning(win fyne.Window, port, hostID string) {
 		split,
 	))
 
+	// Démarrage asynchrone du serveur
 	go func() {
 		pubIP := getPublicIP()
 		time.Sleep(1 * time.Second)
 		stopLoading = true
 
+		// Mettre à jour la carte d'info
+		serverInfoCard.SetValue("Actif")
+
 		updatedInfo := fmt.Sprintf(
-			"✅ SERVEUR ACTIF\n\n"+
-				"🔑 ID: %s\n"+
-				"🌐 Port: %s\n"+
-				"🏠 IP Locale: %s\n"+
-				"🌍 IP Publique: %s\n"+
-				"📍 Adresse: %s:%s\n\n"+
-				"💡 Partagez l'IP publique et l'ID\n"+
+			"SERVEUR ACTIF\n\n"+
+				"ID: %s\n"+
+				"Port: %s\n"+
+				"IP Locale: %s\n"+
+				"IP Publique: %s\n"+
+				"Adresse: %s:%s\n\n"+
+				"Partagez l'IP publique et l'ID\n"+
 				"avec les utilisateurs.",
 			hostID, port, localIP, pubIP, pubIP, port,
 		)
@@ -725,10 +738,118 @@ func showHostRunning(win fyne.Window, port, hostID string) {
 		statusBar.SetConnected(true, localIP+":"+port)
 
 		currentServer = NewServer(hostID)
-		addLog(fmt.Sprintf("🌐 Port: %s", port))
-		addLog(fmt.Sprintf("🔑 ID: %s", hostID))
-		addLog(fmt.Sprintf("🏠 IP Locale: %s", localIP))
-		addLog(fmt.Sprintf("🌍 IP Publique: %s", pubIP))
+		addLog(fmt.Sprintf("Port: %s", port))
+		addLog(fmt.Sprintf("ID: %s", hostID))
+		addLog(fmt.Sprintf("IP Locale: %s", localIP))
+		addLog(fmt.Sprintf("IP Publique: %s", pubIP))
 		currentServer.Start(port)
 	}()
-} 
+}
+
+// showHostSecurityDialog affiche le dialogue de sécurité pour le Host
+func showHostSecurityDialog(win fyne.Window) {
+	// Whitelist IP
+	ipWhitelistCheck := widget.NewCheck("Activer la liste blanche IP", nil)
+	ipWhitelist := GetIPWhitelist()
+	ipWhitelistCheck.SetChecked(ipWhitelist.IsEnabled())
+	ipWhitelistCheck.OnChanged = func(enabled bool) {
+		if enabled {
+			ipWhitelist.Enable()
+			addLog("Whitelist IP activée")
+		} else {
+			ipWhitelist.Disable()
+			addLog("Whitelist IP désactivée")
+		}
+	}
+
+	// Conteneur pour afficher les IP (simple VBox au lieu de widget.List)
+	ipListContainer := container.NewVBox()
+	
+	// Fonction pour rafraîchir la liste des IP
+	var refreshIPList func()
+	refreshIPList = func() {
+		ipListContainer.RemoveAll()
+		ips := ipWhitelist.GetIPs()
+		
+		if len(ips) == 0 {
+			emptyLabel := widget.NewLabel("Aucune IP configurée")
+			emptyLabel.TextStyle = fyne.TextStyle{Italic: true}
+			ipListContainer.Add(emptyLabel)
+		} else {
+			for _, ip := range ips {
+				currentIP := ip // Capture de la valeur pour la closure
+				
+				ipLabel := widget.NewLabel(currentIP)
+				removeBtn := widget.NewButton("×", func() {
+					ipWhitelist.RemoveIP(currentIP)
+					refreshIPList()
+					addLog(fmt.Sprintf("IP supprimée: %s", currentIP))
+				})
+				removeBtn.Importance = widget.DangerImportance
+				
+				row := container.NewBorder(nil, nil, nil, removeBtn, ipLabel)
+				ipListContainer.Add(row)
+			}
+		}
+		ipListContainer.Refresh()
+	}
+	
+	refreshIPList()
+
+	// Info-bulle
+	infoLabel := widget.NewLabel("La whitelist IP permet de n'autoriser que certaines\nadresses IP à se connecter au serveur.")
+	infoLabel.TextStyle = fyne.TextStyle{Italic: true}
+
+	// Container pour la liste avec taille fixe (zone scrollable)
+	ipListScroll := container.NewVScroll(ipListContainer)
+	ipListScroll.SetMinSize(fyne.NewSize(400, 200))
+
+	// Section du haut: titre, info, checkbox et liste
+	topSection := container.NewVBox(
+		widget.NewLabelWithStyle("Sécurité du Serveur", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewSeparator(),
+		infoLabel,
+		widget.NewSeparator(),
+		ipWhitelistCheck,
+		widget.NewSeparator(),
+		widget.NewLabel("IPs autorisées:"),
+		ipListScroll,
+	)
+
+	// Champ pour ajouter une IP (en dehors du scroll, toujours visible en bas)
+	ipEntry := widget.NewEntry()
+	ipEntry.SetPlaceHolder("Ex: 192.168.1.100 ou 192.168.1.0/24")
+
+	addIPBtn := widget.NewButton("Ajouter", func() {
+		ip := ipEntry.Text
+		if ip == "" {
+			return
+		}
+		if err := ipWhitelist.AddIP(ip); err != nil {
+			dialog.ShowError(err, win)
+		} else {
+			addLog(fmt.Sprintf("IP ajoutée: %s", ip))
+			ipEntry.SetText("")
+			refreshIPList()
+		}
+	})
+	addIPBtn.Importance = widget.HighImportance
+
+	// Section du bas (fixe): label + champ + bouton
+	addIPLabel := widget.NewLabel("Ajouter une IP:")
+	bottomSection := container.NewVBox(
+		widget.NewSeparator(),
+		addIPLabel,
+		container.NewBorder(nil, nil, nil, addIPBtn, ipEntry),
+	)
+
+	// Layout final: top + bottom
+	content := container.NewBorder(
+		topSection,
+		bottomSection,
+		nil, nil,
+		nil,
+	)
+
+	dialog.ShowCustom("Sécurité", "Fermer", content, win)
+}

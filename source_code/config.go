@@ -26,6 +26,11 @@ type AppConfig struct {
 	FilterExcludeFolders []string `json:"filter_exclude_folders,omitempty"`
 	FilterMaxSize       int64    `json:"filter_max_size,omitempty"`
 	FilterExcludeHidden bool     `json:"filter_exclude_hidden,omitempty"`
+	// Limites serveur (Host)
+	MaxStorageSize     int64 `json:"max_storage_size,omitempty"`     // Limite totale en bytes (0 = illimité)
+	MaxFileSize        int64 `json:"max_file_size,omitempty"`        // Taille max par fichier
+	MaxFilesCount      int64 `json:"max_files_count,omitempty"`      // Nombre max de fichiers
+	WarnStoragePercent int   `json:"warn_storage_percent,omitempty"` // Alerte à ce % (ex: 80)
 }
 
 var configFilePath string
@@ -37,12 +42,13 @@ func init() {
 func LoadConfig() (*AppConfig, error) {
 	data, err := os.ReadFile(configFilePath)
 	if err != nil {
-		return &AppConfig{}, err
+		// Retourner une config par défaut avec thème sombre
+		return &AppConfig{DarkTheme: true, ShowStatusBar: true, LogsMaxCount: 100}, err
 	}
 
 	var config AppConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		return &AppConfig{}, err
+		return &AppConfig{DarkTheme: true, ShowStatusBar: true, LogsMaxCount: 100}, err
 	}
 
 	return &config, nil

@@ -37,7 +37,9 @@ func NewServer(hostID string) *Server {
 		HostID:  hostID,
 		Clients: make(map[*websocket.Conn]string),
 		Upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
+			CheckOrigin:     func(r *http.Request) bool { return true },
+			ReadBufferSize:  10 * 1024 * 1024, // 10MB
+			WriteBufferSize: 10 * 1024 * 1024, // 10MB
 		},
 		skipNext:     make(map[string]time.Time),
 		knownFiles:   make(map[string]time.Time),
@@ -54,32 +56,36 @@ func (s *Server) Start(port string) {
 	s.WatchDir = filepath.Join(getExecutableDir(), "Spiralydata")
 	os.MkdirAll(s.WatchDir, 0755)
 
-	addLog("🚀 Serveur démarré")
-	addLog(fmt.Sprintf("🔑 ID: %s", s.HostID))
-	addLog(fmt.Sprintf("📁 Dossier: %s", s.WatchDir))
-	addLog("👂 En attente de connexions...")
+	addLog("Serveur démarré")
+	addLog(fmt.Sprintf("ID: %s", s.HostID))
+	addLog(fmt.Sprintf("Dossier: %s", s.WatchDir))
+	addLog("En attente de connexions...")
 
 	s.updateKnownFilesAndDirs()
 	go s.watchRecursive()
 	go s.periodicCheck()
 	go s.cleanPendingMoves()
 
-	http.HandleFunc("/ws", s.handleWS)
+	// Créer un nouveau mux pour éviter les conflits lors du redémarrage
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWS)
+	
 	s.httpServer = &http.Server{
 		Addr:         ":" + port,
+		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-	addLog(fmt.Sprintf("🌐 Port: %s", port))
+	addLog(fmt.Sprintf("Port: %s", port))
 	
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		addLog(fmt.Sprintf("❌ Erreur serveur: %v", err))
+		addLog(fmt.Sprintf("Erreur serveur: %v", err))
 	}
 }
 
 func (s *Server) Stop() {
-	addLog("🛑 Arrêt du serveur...")
+	addLog("Arrêt du serveur...")
 	s.shouldExit = true
 	
 	if s.cancel != nil {
@@ -97,13 +103,15 @@ func (s *Server) Stop() {
 	s.mu.Unlock()
 	
 	if s.httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		s.httpServer.Shutdown(ctx)
+		s.httpServer = nil
 	}
 	
-	time.Sleep(500 * time.Millisecond)
-	addLog("✅ Serveur arrêté")
+	// Attendre que le port soit libéré
+	time.Sleep(1 * time.Second)
+	addLog("Serveur arrêté")
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +122,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		addLog(fmt.Sprintf("❌ Erreur WebSocket: %v", err))
 		return
 	}
+
+	// Augmenter la limite de lecture pour les gros fichiers
+	ws.SetReadLimit(50 * 1024 * 1024) // 50MB
 
 	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var rawMsg json.RawMessage
@@ -193,6 +204,13 @@ func (s *Server) handleClientMessages(ws *websocket.Conn, clientName string) {
 					continue
 				}
 				
+				if reqType == "backup_request" {
+					addLog(fmt.Sprintf("💾 %s: Demande backup", clientName))
+					s.sendAllFilesAndDirs(ws)
+					addLog(fmt.Sprintf("📤 Backup envoyée à %s", clientName))
+					continue
+				}
+				
 				if reqType == "request_file_tree" {
 					addLog(fmt.Sprintf("📂 %s: Demande arborescence", clientName))
 					s.sendFileTree(ws)
@@ -207,7 +225,7 @@ func (s *Server) handleClientMessages(ws *websocket.Conn, clientName string) {
 								itemPaths = append(itemPaths, path)
 							}
 						}
-						addLog(fmt.Sprintf("⬇️ %s: Téléchargement de %d éléments", clientName, len(itemPaths)))
+						addLog(fmt.Sprintf("⬇️ %s: Download %d elements", clientName, len(itemPaths)))
 						s.sendSelectedFiles(ws, itemPaths)
 						continue
 					}

@@ -156,4 +156,43 @@ func isHiddenFile(name string) bool {
 	// Sur Windows, il faudrait vérifier l'attribut du fichier
 	// Pour simplifier, on vérifie juste le préfixe point
 	return strings.HasPrefix(name, ".")
+}
+
+// copyDirRecursive copie récursivement un dossier vers une destination
+func copyDirRecursive(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("source n'est pas un dossier")
+	}
+	
+	// Créer le dossier destination
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+	
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		
+		if entry.IsDir() {
+			if err := copyDirRecursive(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	
+	return nil
 } 

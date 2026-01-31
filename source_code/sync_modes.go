@@ -509,6 +509,7 @@ func (tw *ThrottledWriter) Write(p []byte) (n int, err error) {
 var globalSyncConfig = NewSyncConfig()
 var globalTransferQueue = NewTransferQueue(1000)
 var globalScheduler *Scheduler
+var globalPendingActions = NewPendingActionsManager()
 
 // GetSyncConfig retourne la configuration globale
 func GetSyncConfig() *SyncConfig {
@@ -523,4 +524,121 @@ func SetSyncConfig(config *SyncConfig) {
 // GetTransferQueue retourne la file de transfert globale
 func GetTransferQueue() *TransferQueue {
 	return globalTransferQueue
+}
+
+// GetPendingActions retourne le gestionnaire d'actions en attente
+func GetPendingActions() *PendingActionsManager {
+	return globalPendingActions
+}
+
+// ================================================================================
+// PENDING ACTIONS - Système de suivi des actions locales en attente d'envoi
+// ================================================================================
+
+// ActionType définit le type d'action en attente
+type ActionType int
+
+const (
+	ActionCreate ActionType = iota
+	ActionModify
+	ActionDelete
+)
+
+// PendingAction représente une action locale en attente d'envoi au serveur
+type PendingAction struct {
+	Type    ActionType
+	Path    string
+	Size    int64
+	ModTime time.Time
+	IsDir   bool
+	AddedAt time.Time
+}
+
+// GetDescription retourne une description lisible de l'action
+func (pa *PendingAction) GetDescription() string {
+	switch pa.Type {
+	case ActionCreate:
+		return "Nouveau"
+	case ActionModify:
+		return "Modifié"
+	case ActionDelete:
+		return "Supprimé"
+	default:
+		return "Inconnu"
+	}
+}
+
+// GetIcon retourne l'icône correspondant à l'action
+func (pa *PendingAction) GetIcon() string {
+	switch pa.Type {
+	case ActionCreate:
+		return "➕"
+	case ActionModify:
+		return "✏️"
+	case ActionDelete:
+		return "🗑️"
+	default:
+		return "❓"
+	}
+}
+
+// PendingActionsManager gère les actions en attente d'envoi
+type PendingActionsManager struct {
+	actions map[string]*PendingAction
+	mu      sync.Mutex
+}
+
+// NewPendingActionsManager crée un nouveau gestionnaire d'actions
+func NewPendingActionsManager() *PendingActionsManager {
+	return &PendingActionsManager{
+		actions: make(map[string]*PendingAction),
+	}
+}
+
+// Add ajoute ou met à jour une action en attente
+func (pam *PendingActionsManager) Add(action *PendingAction) {
+	pam.mu.Lock()
+	defer pam.mu.Unlock()
+	action.AddedAt = time.Now()
+	pam.actions[action.Path] = action
+}
+
+// Remove supprime une action par son chemin
+func (pam *PendingActionsManager) Remove(path string) {
+	pam.mu.Lock()
+	defer pam.mu.Unlock()
+	delete(pam.actions, path)
+}
+
+// GetAll retourne toutes les actions en attente
+func (pam *PendingActionsManager) GetAll() []*PendingAction {
+	pam.mu.Lock()
+	defer pam.mu.Unlock()
+	result := make([]*PendingAction, 0, len(pam.actions))
+	for _, action := range pam.actions {
+		result = append(result, action)
+	}
+	return result
+}
+
+// Clear supprime toutes les actions en attente
+func (pam *PendingActionsManager) Clear() {
+	pam.mu.Lock()
+	defer pam.mu.Unlock()
+	pam.actions = make(map[string]*PendingAction)
+}
+
+// Count retourne le nombre d'actions en attente
+func (pam *PendingActionsManager) Count() int {
+	pam.mu.Lock()
+	defer pam.mu.Unlock()
+	return len(pam.actions)
+}
+
+// Has vérifie si une action existe pour un chemin
+func (pam *PendingActionsManager) Has(path string) bool {
+	pam.mu.Lock()
+	defer pam.mu.Unlock()
+	_, exists := pam.actions[path]
+	return exists
 }

@@ -357,6 +357,7 @@ type StatCard struct {
 	titleLbl  *widget.Label
 	valueLbl  *widget.Label
 	iconLbl   *widget.Label
+	bg        *canvas.Rectangle
 }
 
 // NewStatCard crée une nouvelle carte de statistique
@@ -378,13 +379,29 @@ func NewStatCard(title, icon string, value string) *StatCard {
 		sc.valueLbl,
 	)
 
-	// Fond de la carte
-	bg := canvas.NewRectangle(color.RGBA{R: 45, G: 50, B: 60, A: 255})
-	bg.CornerRadius = 8
+	// Fond de la carte - adaptatif au thème
+	sc.bg = canvas.NewRectangle(sc.getBackgroundColor())
+	sc.bg.CornerRadius = 8
 
-	sc.container = container.NewStack(bg, container.NewPadded(content))
+	sc.container = container.NewStack(sc.bg, container.NewPadded(content))
 
 	return sc
+}
+
+// getBackgroundColor retourne la couleur de fond selon le thème
+func (sc *StatCard) getBackgroundColor() color.Color {
+	if GetCurrentTheme() == ThemeDark {
+		return color.RGBA{R: 45, G: 50, B: 60, A: 255}
+	}
+	return color.RGBA{R: 220, G: 225, B: 235, A: 255}
+}
+
+// RefreshTheme met à jour les couleurs selon le thème actuel
+func (sc *StatCard) RefreshTheme() {
+	if sc.bg != nil {
+		sc.bg.FillColor = sc.getBackgroundColor()
+		sc.bg.Refresh()
+	}
 }
 
 // SetValue met à jour la valeur
@@ -582,21 +599,21 @@ func (sh *ShortcutHandler) SetupWindowShortcuts(win fyne.Window) {
 // ACTIVITY LOG WITH COLORS
 // ============================================================================
 
-// LogLevel représente le niveau de log
-type LogLevel int
+// UILogLevel représente le niveau de log pour l'affichage UI
+type UILogLevel int
 
 const (
-	LogInfo LogLevel = iota
-	LogSuccess
-	LogWarning
-	LogError
+	UILogInfo UILogLevel = iota
+	UILogSuccess
+	UILogWarning
+	UILogError
 )
 
 // ColoredLog représente un log coloré
 type ColoredLog struct {
 	Time    time.Time
 	Message string
-	Level   LogLevel
+	Level   UILogLevel
 }
 
 // LogViewer est un visualiseur de logs amélioré
@@ -683,7 +700,7 @@ func NewLogViewer(maxLogs int) *LogViewer {
 }
 
 // AddLog ajoute un log
-func (lv *LogViewer) AddLog(message string, level LogLevel) {
+func (lv *LogViewer) AddLog(message string, level UILogLevel) {
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 

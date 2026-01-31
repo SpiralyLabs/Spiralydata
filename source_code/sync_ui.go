@@ -311,26 +311,26 @@ func ShowConflictDialog(window fyne.Window, conflict *Conflict, onResolve func(C
 	infoPanel := container.NewGridWithColumns(2, localInfo, remoteInfo)
 	
 	// Boutons de résolution
-	keepLocalBtn := widget.NewButton("📁 Garder local", func() {
+	keepLocalBtn := widget.NewButton("Garder local", func() {
 		onResolve(ConflictKeepLocal)
 	})
 	
-	keepRemoteBtn := widget.NewButton("☁️ Garder distant", func() {
+	keepRemoteBtn := widget.NewButton("Garder distant", func() {
 		onResolve(ConflictKeepRemote)
 	})
 	
-	keepNewestBtn := widget.NewButton("🕐 Plus récent", func() {
+	keepNewestBtn := widget.NewButton("Plus récent", func() {
 		onResolve(ConflictKeepNewest)
 	})
 	keepNewestBtn.Importance = widget.HighImportance
 	
-	keepBothBtn := widget.NewButton("📋 Garder les deux", func() {
+	keepBothBtn := widget.NewButton("Garder les deux", func() {
 		onResolve(ConflictKeepBoth)
 	})
 	
 	var mergeBtn *widget.Button
 	if IsTextFile(conflict.Path) {
-		mergeBtn = widget.NewButton("🔀 Fusionner", func() {
+		mergeBtn = widget.NewButton("Fusionner", func() {
 			onResolve(ConflictAutoMerge)
 		})
 	}
@@ -403,17 +403,17 @@ func ShowConflictListDialog(window fyne.Window, cm *ConflictManager) {
 	list.Resize(fyne.NewSize(500, 300))
 	
 	// Boutons d'action groupée
-	resolveAllNewest := widget.NewButton("🕐 Tous: Plus récent", func() {
+	resolveAllNewest := widget.NewButton("Tous: Plus récent", func() {
 		count := cm.ResolveAll(ConflictKeepNewest)
 		dialog.ShowInformation("Résolu", fmt.Sprintf("%d conflit(s) résolu(s)", count), window)
 	})
 	
-	resolveAllLocal := widget.NewButton("📁 Tous: Local", func() {
+	resolveAllLocal := widget.NewButton("Tous: Local", func() {
 		count := cm.ResolveAll(ConflictKeepLocal)
 		dialog.ShowInformation("Résolu", fmt.Sprintf("%d conflit(s) résolu(s)", count), window)
 	})
 	
-	resolveAllRemote := widget.NewButton("☁️ Tous: Distant", func() {
+	resolveAllRemote := widget.NewButton("Tous: Distant", func() {
 		count := cm.ResolveAll(ConflictKeepRemote)
 		dialog.ShowInformation("Résolu", fmt.Sprintf("%d conflit(s) résolu(s)", count), window)
 	})
@@ -435,101 +435,119 @@ func ShowConflictListDialog(window fyne.Window, cm *ConflictManager) {
 	dialog.ShowCustom("Gestion des conflits", "Fermer", content, window)
 }
 
-// ShowTransferQueueDialog affiche la file de transfert
+// ShowTransferQueueDialog affiche les actions en attente d'envoi au serveur
 func ShowTransferQueueDialog(window fyne.Window, queue *TransferQueue) {
-	items := queue.GetItems()
+	pendingActions := GetPendingActions()
+	actions := pendingActions.GetAll()
 	
 	titleLabel := widget.NewLabelWithStyle(
-		fmt.Sprintf("📤 File de transfert (%d éléments)", len(items)),
+		fmt.Sprintf("Actions en attente (%d)", len(actions)),
 		fyne.TextAlignCenter,
 		fyne.TextStyle{Bold: true},
 	)
 	
-	// Statut
-	statusLabel := widget.NewLabel("")
-	updateStatus := func() {
-		if queue.IsPaused() {
-			statusLabel.SetText("⏸️ En pause")
+	infoLabel := widget.NewLabel("Ces actions seront envoyées au serveur lors du prochain 'Envoyer'")
+	infoLabel.TextStyle = fyne.TextStyle{Italic: true}
+	infoLabel.Wrapping = fyne.TextWrapWord
+	
+	// Conteneur pour la liste des actions
+	actionsContainer := container.NewVBox()
+	
+	// Fonction pour rafraîchir la liste
+	var refreshList func()
+	refreshList = func() {
+		actionsContainer.RemoveAll()
+		currentActions := pendingActions.GetAll()
+		titleLabel.SetText(fmt.Sprintf("Actions en attente (%d)", len(currentActions)))
+		
+		if len(currentActions) == 0 {
+			emptyLabel := widget.NewLabel("Aucune action en attente.\n\nLes modifications locales apparaîtront ici\naprès création, modification ou suppression de fichiers.")
+			emptyLabel.Alignment = fyne.TextAlignCenter
+			emptyLabel.Wrapping = fyne.TextWrapWord
+			actionsContainer.Add(container.NewPadded(emptyLabel))
 		} else {
-			statusLabel.SetText("▶️ Actif")
+			for _, action := range currentActions {
+				actionCopy := action
+				
+				// Icône selon le type d'action et de fichier
+				typeIcon := "📄"
+				if action.IsDir {
+					typeIcon = "📁"
+				}
+				
+				// Ligne d'information
+				actionText := fmt.Sprintf("%s %s  %s", action.GetIcon(), typeIcon, action.Path)
+				actionLabel := widget.NewLabel(actionText)
+				actionLabel.Wrapping = fyne.TextWrapWord
+				
+				// Taille (seulement pour les fichiers)
+				sizeText := ""
+				if !action.IsDir && action.Type != ActionDelete {
+					sizeText = FormatFileSize(action.Size)
+				}
+				sizeLabel := widget.NewLabel(sizeText)
+				
+				// Description de l'action
+				descLabel := widget.NewLabel(action.GetDescription())
+				descLabel.TextStyle = fyne.TextStyle{Bold: true}
+				
+				// Bouton supprimer
+				removeBtn := widget.NewButton("×", func() {
+					pendingActions.Remove(actionCopy.Path)
+					refreshList()
+				})
+				removeBtn.Importance = widget.DangerImportance
+				
+				// Ligne complète
+				row := container.NewBorder(
+					nil, nil,
+					container.NewHBox(descLabel, sizeLabel),
+					removeBtn,
+					actionLabel,
+				)
+				
+				actionsContainer.Add(container.NewPadded(row))
+				actionsContainer.Add(widget.NewSeparator())
+			}
 		}
+		actionsContainer.Refresh()
 	}
-	updateStatus()
+	
+	refreshList()
+	
+	// Zone scrollable pour les actions
+	actionsScroll := container.NewVScroll(actionsContainer)
+	actionsScroll.SetMinSize(fyne.NewSize(600, 400))
 	
 	// Boutons de contrôle
-	pauseBtn := widget.NewButton("⏸️ Pause", func() {
-		queue.Pause()
-		updateStatus()
+	clearBtn := widget.NewButton("Vider toutes les actions", func() {
+		pendingActions.Clear()
+		refreshList()
+		addLog("Actions en attente vidées")
 	})
+	clearBtn.Importance = widget.DangerImportance
 	
-	resumeBtn := widget.NewButton("▶️ Reprendre", func() {
-		queue.Resume()
-		updateStatus()
+	refreshBtn := widget.NewButton("Actualiser", func() {
+		refreshList()
 	})
-	
-	clearBtn := widget.NewButton("🗑️ Vider", func() {
-		dialog.ShowConfirm("Confirmation", "Vider la file de transfert?", func(ok bool) {
-			if ok {
-				queue.Clear()
-				dialog.ShowInformation("Info", "File vidée", window)
-			}
-		}, window)
-	})
+	refreshBtn.Importance = widget.LowImportance
 	
 	controlBar := container.NewHBox(
-		statusLabel,
 		layout.NewSpacer(),
-		pauseBtn,
-		resumeBtn,
+		refreshBtn,
 		clearBtn,
 	)
 	
-	// Liste des transferts
-	list := widget.NewList(
-		func() int { return len(items) },
-		func() fyne.CanvasObject {
-			return container.NewHBox(
-				widget.NewIcon(theme.UploadIcon()),
-				widget.NewLabel("Fichier"),
-				layout.NewSpacer(),
-				widget.NewLabel("Taille"),
-				widget.NewLabel("Priorité"),
-			)
-		},
-		func(id widget.ListItemID, item fyne.CanvasObject) {
-			if id >= len(items) {
-				return
-			}
-			transfer := items[id]
-			box := item.(*fyne.Container)
-			
-			icon := box.Objects[0].(*widget.Icon)
-			if transfer.IsDir {
-				icon.SetResource(theme.FolderIcon())
-			} else {
-				icon.SetResource(theme.FileIcon())
-			}
-			
-			nameLabel := box.Objects[1].(*widget.Label)
-			nameLabel.SetText(transfer.Path)
-			
-			sizeLabel := box.Objects[3].(*widget.Label)
-			sizeLabel.SetText(FormatFileSize(transfer.Size))
-			
-			priorityLabel := box.Objects[4].(*widget.Label)
-			priorityLabel.SetText(fmt.Sprintf("P%d", transfer.Priority))
-		},
-	)
-	
 	content := container.NewBorder(
-		container.NewVBox(titleLabel, controlBar, widget.NewSeparator()),
+		container.NewVBox(titleLabel, infoLabel, widget.NewSeparator(), controlBar, widget.NewSeparator()),
 		nil,
 		nil,
 		nil,
-		list,
+		actionsScroll,
 	)
 	
-	dialog.ShowCustom("File de transfert", "Fermer", content, window)
+	// Dialog plus grand et spacieux
+	dialog.ShowCustom("File Transfert - Actions en attente", "Fermer", content, window)
 }
 
 // ShowSyncSummary affiche un résumé de la configuration de sync

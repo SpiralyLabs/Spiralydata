@@ -416,7 +416,7 @@ func createAuditTab(window fyne.Window) fyne.CanvasObject {
 	})
 	
 	// Voir les alertes de sécurité
-	alertsBtn := widget.NewButton("🚨 Alertes sécurité", func() {
+	alertsBtn := widget.NewButton("Alertes sécurité", func() {
 		alerts := auditLogger.GetSecurityAlerts(20)
 		if len(alerts) == 0 {
 			dialog.ShowInformation("Alertes", "Aucune alerte de sécurité", window)

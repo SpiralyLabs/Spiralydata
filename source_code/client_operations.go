@@ -19,6 +19,7 @@ func (c *Client) PullAllFromServer() {
 	}
 
 	c.isProcessing = true
+	c.skipTracking = true // Ignorer le tracking pendant la réception
 	time.Sleep(100 * time.Millisecond)
 
 	c.pendingMu.Lock()
@@ -65,12 +66,14 @@ func (c *Client) PullAllFromServer() {
 	if err := c.WriteJSONSafe(reqMsg); err != nil {
 		addLog("❌ Erreur envoi")
 		c.isProcessing = false
+		c.skipTracking = false
 		return
 	}
 
 	go func() {
 		time.Sleep(4 * time.Second)
 		c.isProcessing = false
+		c.skipTracking = false // Réactiver le tracking après la réception
 		addLog("✅ Réception terminée")
 	}()
 }
@@ -304,6 +307,9 @@ func (c *Client) PushLocalChanges() {
 
 	c.isProcessing = false
 	addLog(fmt.Sprintf("✅ %d opérations envoyées avec succès", sent))
+	
+	// Vider les pending actions après envoi réussi
+	GetPendingActions().Clear()
 }
 
 // sendFile envoie un fichier au serveur
@@ -392,7 +398,11 @@ func (c *Client) ClearLocalFiles() {
 	}
 	
 	c.isProcessing = true
-	defer func() { c.isProcessing = false }()
+	c.skipTracking = true // Ignorer le tracking pendant la suppression
+	defer func() { 
+		c.isProcessing = false 
+		c.skipTracking = false
+	}()
 	
 	time.Sleep(300 * time.Millisecond)
 	
@@ -423,6 +433,9 @@ func (c *Client) ClearLocalFiles() {
 	c.lastState = make(map[string]time.Time)
 	c.lastDirs = make(map[string]time.Time)
 	c.mu.Unlock()
+	
+	// Vider les pending actions car les fichiers n'existent plus
+	GetPendingActions().Clear()
 	
 	time.Sleep(300 * time.Millisecond)
 	
@@ -461,6 +474,12 @@ func (c *Client) watchRecursive() {
 				return
 			}
 			
+			// Tracker le changement local SEULEMENT si sync auto désactivée
+			// Si sync auto active, pas besoin de tracker car envoyé immédiatement
+			if !c.autoSync {
+				c.TrackLocalChange(event)
+			}
+			
 			if c.autoSync {
 				time.Sleep(100 * time.Millisecond)
 				c.handleLocalEvent(event)
@@ -481,6 +500,93 @@ func (c *Client) watchRecursive() {
 				addLog(fmt.Sprintf("⚠️ Erreur watcher: %v", err))
 			}
 			time.Sleep(200 * time.Millisecond)
+		}
+	}
+}
+
+// TrackLocalChange ajoute un changement local aux pending actions
+// Ne s'applique que si la sync auto est désactivée et skipTracking est false
+func (c *Client) TrackLocalChange(event fsnotify.Event) {
+	// Ignorer si on est en train de recevoir ou vider les fichiers
+	if c.skipTracking {
+		return
+	}
+	
+	relPath, err := filepath.Rel(c.localDir, event.Name)
+	if err != nil {
+		return
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	// Vérifier les filtres
+	filterConfig := GetFilterConfig()
+	if filterConfig.Filters.Path.ShouldFilter(relPath) {
+		return
+	}
+
+	pendingActions := GetPendingActions()
+
+	// Suppression
+	if event.Op&fsnotify.Remove != 0 {
+		// Vérifier si c'était un dossier ou fichier connu
+		c.mu.Lock()
+		_, wasDir := c.knownDirs[relPath]
+		_, wasFile := c.knownFiles[relPath]
+		c.mu.Unlock()
+
+		if wasDir || wasFile {
+			pendingActions.Add(&PendingAction{
+				Type:  ActionDelete,
+				Path:  relPath,
+				IsDir: wasDir,
+			})
+		}
+		return
+	}
+
+	// Création ou modification
+	if event.Op&fsnotify.Create != 0 || event.Op&fsnotify.Write != 0 {
+		info, err := os.Stat(event.Name)
+		if err != nil {
+			return
+		}
+
+		if info.IsDir() {
+			// Nouveau dossier
+			c.mu.Lock()
+			_, known := c.knownDirs[relPath]
+			c.mu.Unlock()
+
+			if !known {
+				pendingActions.Add(&PendingAction{
+					Type:    ActionCreate,
+					Path:    relPath,
+					IsDir:   true,
+					ModTime: info.ModTime(),
+				})
+			}
+		} else {
+			// Vérifier filtrage par extension et taille
+			if filterConfig.ShouldFilterFile(relPath, info.Size(), false) {
+				return
+			}
+
+			c.mu.Lock()
+			_, known := c.knownFiles[relPath]
+			c.mu.Unlock()
+
+			actionType := ActionModify
+			if !known {
+				actionType = ActionCreate
+			}
+
+			pendingActions.Add(&PendingAction{
+				Type:    actionType,
+				Path:    relPath,
+				Size:    info.Size(),
+				IsDir:   false,
+				ModTime: info.ModTime(),
+			})
 		}
 	}
 }
@@ -750,4 +856,277 @@ func (c *Client) sendFileNow(relPath string) {
 	c.knownFiles[relPath] = time.Now()
 	c.mu.Unlock()
 	time.Sleep(50 * time.Millisecond)
+}
+
+// ScanAndDetectDifferences scanne le dossier local et détecte les fichiers
+// qui n'existent pas sur le serveur pour les ajouter aux pending actions
+func (c *Client) ScanAndDetectDifferences() {
+	filterConfig := GetFilterConfig()
+	pendingActions := GetPendingActions()
+	
+	// Scanner tous les fichiers et dossiers locaux
+	localFiles := make(map[string]os.FileInfo)
+	localDirs := make(map[string]os.FileInfo)
+	
+	filepath.Walk(c.localDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		
+		relPath, _ := filepath.Rel(c.localDir, path)
+		if relPath == "." {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
+		
+		if info.IsDir() {
+			if !filterConfig.Filters.Path.ShouldFilter(relPath) {
+				localDirs[relPath] = info
+			}
+		} else {
+			if !filterConfig.ShouldFilterFile(relPath, info.Size(), false) {
+				localFiles[relPath] = info
+			}
+		}
+		return nil
+	})
+	
+	// Obtenir l'état connu du serveur
+	serverFiles, serverDirs := c.getServerState()
+	
+	detectedCount := 0
+	
+	// Détecter les nouveaux dossiers
+	for dirPath, info := range localDirs {
+		if _, existsOnServer := serverDirs[dirPath]; !existsOnServer {
+			pendingActions.Add(&PendingAction{
+				Type:    ActionCreate,
+				Path:    dirPath,
+				IsDir:   true,
+				ModTime: info.ModTime(),
+			})
+			detectedCount++
+		}
+	}
+	
+	// Détecter les nouveaux fichiers ou modifiés
+	for filePath, info := range localFiles {
+		serverModTime, existsOnServer := serverFiles[filePath]
+		
+		if !existsOnServer {
+			// Nouveau fichier
+			pendingActions.Add(&PendingAction{
+				Type:    ActionCreate,
+				Path:    filePath,
+				Size:    info.Size(),
+				IsDir:   false,
+				ModTime: info.ModTime(),
+			})
+			detectedCount++
+		} else if info.ModTime().After(serverModTime) {
+			// Fichier modifié localement (plus récent que le serveur)
+			pendingActions.Add(&PendingAction{
+				Type:    ActionModify,
+				Path:    filePath,
+				Size:    info.Size(),
+				IsDir:   false,
+				ModTime: info.ModTime(),
+			})
+			detectedCount++
+		}
+	}
+	
+	if detectedCount > 0 {
+		addLog(fmt.Sprintf("📋 %d différences locales détectées", detectedCount))
+	}
+}
+
+// DownloadBackup télécharge tous les fichiers vers un dossier Backup
+// Approche: D'abord synchroniser depuis le serveur, puis copier le dossier local
+func (c *Client) DownloadBackup(destDir string) {
+	if c.isProcessing {
+		addLog("⏳ Operation deja en cours...")
+		return
+	}
+	
+	// Créer le dossier de backup avec timestamp
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	backupDir := filepath.Join(destDir, fmt.Sprintf("Backup_Spiralydata_%s", timestamp))
+	
+	addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	addLog("📦 DEBUT DE LA BACKUP")
+	addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	
+	// Lancer en goroutine pour ne pas bloquer l'UI
+	go c.performBackupViaPull(backupDir)
+}
+
+func (c *Client) performBackupViaPull(backupDir string) {
+	c.isProcessing = true
+	c.skipTracking = true
+	defer func() {
+		c.isProcessing = false
+		c.skipTracking = false
+	}()
+	
+	// === ETAPE 1: Compter les fichiers sur le serveur ===
+	addLog("📋 Etape 1: Scan du serveur...")
+	
+	c.explorerActive = true
+	c.treeItemsChan = make(chan FileTreeItemMessage, 1000)
+	
+	if err := c.WriteJSONSafe(map[string]string{"type": "request_file_tree", "origin": "client"}); err != nil {
+		addLog(fmt.Sprintf("❌ Erreur: %v", err))
+		c.explorerActive = false
+		return
+	}
+	
+	// Compter les éléments
+	totalElements := 0
+	timeout1 := time.After(60 * time.Second)
+	
+countLoop:
+	for {
+		select {
+		case <-timeout1:
+			break countLoop
+		case item, ok := <-c.treeItemsChan:
+			if !ok {
+				break countLoop
+			}
+			if item.Type == "file_tree_complete" {
+				break countLoop
+			}
+			if item.Type == "file_tree_item" {
+				totalElements++
+			}
+		}
+	}
+	c.explorerActive = false
+	c.treeItemsChan = nil
+	
+	if totalElements == 0 {
+		addLog("⚠️ Aucun fichier sur le serveur")
+		return
+	}
+	
+	addLog(fmt.Sprintf("✅ %d elements trouves sur le serveur", totalElements))
+	
+	// === ETAPE 2: Recevoir tous les fichiers ===
+	addLog("📥 Etape 2: Reception des fichiers...")
+	
+	reqMsg := map[string]string{
+		"type":   "request_all_files",
+		"origin": "client",
+	}
+	
+	if err := c.WriteJSONSafe(reqMsg); err != nil {
+		addLog(fmt.Sprintf("❌ Erreur: %v", err))
+		return
+	}
+	
+	// Attendre la réception en comptant les fichiers locaux
+	lastCount := countLocalFiles(c.localDir)
+	stableCount := 0
+	maxWait := 60 // secondes max
+	
+	for i := 0; i < maxWait; i++ {
+		time.Sleep(1 * time.Second)
+		
+		currentCount := countLocalFiles(c.localDir)
+		
+		// Log de progression tous les 2 secondes
+		if i%2 == 0 {
+			addLog(fmt.Sprintf("⏳ Fichiers locaux: %d / %d attendus", currentCount, totalElements))
+		}
+		
+		// Vérifier la stabilité (pas de nouveaux fichiers depuis 3 secondes)
+		if currentCount == lastCount {
+			stableCount++
+			if stableCount >= 3 {
+				addLog(fmt.Sprintf("✅ Reception terminee: %d fichiers", currentCount))
+				break
+			}
+		} else {
+			stableCount = 0
+		}
+		
+		lastCount = currentCount
+	}
+	
+	// Délai pour s'assurer que les écritures sont finies
+	time.Sleep(1 * time.Second)
+	
+	// === ETAPE 3: Copier le dossier local vers la backup ===
+	addLog("📁 Etape 3: Copie vers le dossier de backup...")
+	
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		addLog(fmt.Sprintf("❌ Erreur creation dossier: %v", err))
+		return
+	}
+	
+	filesCopied := 0
+	dirsCopied := 0
+	errors := 0
+	
+	err := filepath.Walk(c.localDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		
+		relPath, err := filepath.Rel(c.localDir, path)
+		if err != nil || relPath == "." {
+			return nil
+		}
+		
+		destPath := filepath.Join(backupDir, relPath)
+		
+		if info.IsDir() {
+			if err := os.MkdirAll(destPath, 0755); err == nil {
+				dirsCopied++
+			}
+		} else {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				errors++
+				return nil
+			}
+			
+			os.MkdirAll(filepath.Dir(destPath), 0755)
+			
+			if err := os.WriteFile(destPath, data, 0644); err != nil {
+				errors++
+				return nil
+			}
+			filesCopied++
+		}
+		
+		return nil
+	})
+	
+	if err != nil {
+		addLog(fmt.Sprintf("⚠️ Erreur parcours: %v", err))
+	}
+	
+	addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	addLog("✅ BACKUP TERMINEE")
+	addLog(fmt.Sprintf("📁 Dossiers: %d", dirsCopied))
+	addLog(fmt.Sprintf("📄 Fichiers: %d", filesCopied))
+	if errors > 0 {
+		addLog(fmt.Sprintf("⚠️ Erreurs: %d", errors))
+	}
+	addLog(fmt.Sprintf("📍 %s", backupDir))
+	addLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+// countLocalFiles compte le nombre de fichiers (pas dossiers) dans un répertoire
+func countLocalFiles(dir string) int {
+	count := 0
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			count++
+		}
+		return nil
+	})
+	return count
 } 

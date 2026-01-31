@@ -43,6 +43,7 @@ type Client struct {
 	cancel             context.CancelFunc
 	watcherDone        chan struct{}
 	opQueue            chan func() // Queue d'opérations pour éviter les race conditions
+	skipTracking       bool        // Ignorer le tracking pendant Recevoir/Vider local
 }
 
 func StartClientGUI(serverAddr, hostID, syncDir string, stopAnimation, connectionSuccess *bool, loadingLabel, statusLabel, infoLabel *widget.Label, client **Client) {
@@ -50,8 +51,11 @@ func StartClientGUI(serverAddr, hostID, syncDir string, stopAnimation, connectio
 	
 	time.Sleep(300 * time.Millisecond)
 	
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
+	dialer := &websocket.Dialer{
+		HandshakeTimeout:  10 * time.Second,
+		ReadBufferSize:    10 * 1024 * 1024, // 10MB
+		WriteBufferSize:   10 * 1024 * 1024, // 10MB
+	}
 	
 	ws, _, err := dialer.Dial("ws://"+serverAddr+"/ws", nil)
 	if err != nil {
@@ -73,6 +77,10 @@ func StartClientGUI(serverAddr, hostID, syncDir string, stopAnimation, connectio
 		infoLabel.Refresh()
 		return
 	}
+	
+	// Augmenter la limite de lecture pour les gros fichiers
+	ws.SetReadLimit(50 * 1024 * 1024) // 50MB
+	
 	addLog("✅ Connexion WebSocket établie")
 
 	time.Sleep(200 * time.Millisecond)
@@ -196,6 +204,10 @@ func StartClientGUI(serverAddr, hostID, syncDir string, stopAnimation, connectio
 	addLog("🔍 Scan initial du dossier local...")
 	time.Sleep(200 * time.Millisecond)
 	(*client).scanInitial()
+	
+	// Détecter les différences avec le serveur pour les ajouter aux pending actions
+	(*client).ScanAndDetectDifferences()
+	
 	addLog("✅ Client prêt - Mode Manuel")
 	addLog("👀 En attente de commandes...")
 
@@ -282,13 +294,20 @@ func StartClientGUI(serverAddr, hostID, syncDir string, stopAnimation, connectio
 }
 
 func (c *Client) cleanup() {
+	c.mu.Lock()
+	if c.shouldExit {
+		c.mu.Unlock()
+		return // Déjà en cours de cleanup
+	}
 	c.shouldExit = true
+	c.mu.Unlock()
 
 	if c.cancel != nil {
 		c.cancel()
 	}
 
 	if c.watcherActive {
+		c.watcherActive = false
 		select {
 		case <-c.watcherDone:
 		case <-time.After(2 * time.Second):
@@ -298,20 +317,35 @@ func (c *Client) cleanup() {
 	if c.explorerActive {
 		c.explorerActive = false
 		if c.treeItemsChan != nil {
-			close(c.treeItemsChan)
+			select {
+			case <-c.treeItemsChan:
+			default:
+				close(c.treeItemsChan)
+			}
+			c.treeItemsChan = nil
 		}
 	}
 
 	if c.downloadActive {
 		c.downloadActive = false
 		if c.downloadChan != nil {
-			close(c.downloadChan)
+			select {
+			case <-c.downloadChan:
+			default:
+				close(c.downloadChan)
+			}
+			c.downloadChan = nil
 		}
 	}
 
 	// Fermer la queue d'opérations
 	if c.opQueue != nil {
-		close(c.opQueue)
+		select {
+		case <-c.opQueue:
+		default:
+			close(c.opQueue)
+		}
+		c.opQueue = nil
 	}
 }
 
@@ -352,6 +386,9 @@ func (c *Client) ToggleAutoSync() {
 	
 	if status {
 		addLog("🟢 Synchronisation automatique ACTIVÉE")
+		
+		// Vider les pending actions car tout sera synchronisé automatiquement
+		GetPendingActions().Clear()
 		
 		time.Sleep(300 * time.Millisecond)
 		
